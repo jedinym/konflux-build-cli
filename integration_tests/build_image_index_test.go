@@ -107,13 +107,7 @@ func TestBuildImageIndex_MultipleImages(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	baseImageRepo := imageRegistry.GetTestNamespace() + "test-image-index"
@@ -160,9 +154,9 @@ func TestBuildImageIndex_MultipleImages(t *testing.T) {
 	params := BuildImageIndexParams{
 		Image:            indexImage,
 		Images:           []string{image1WithDigest, image2WithDigest},
-		TLSVerify:        boolptr(true),
+		TLSVerify:        new(true),
 		BuildahFormat:    "oci",
-		AlwaysBuildIndex: boolptr(true),
+		AlwaysBuildIndex: new(true),
 		AdditionalTags:   []string{"test-tag-1"},
 	}
 
@@ -183,12 +177,12 @@ func TestBuildImageIndex_MultipleImages(t *testing.T) {
 	))
 
 	// Verify the index was pushed to registry
-	tagExists, err := CheckTagExistence(imageRegistry, baseImageRepo, tag)
+	tagExists, err := CheckManifestExistence(imageRegistry, baseImageRepo, tag)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s to exist", indexImage))
 
 	// Verify additional tag was created
-	tagExists, err = CheckTagExistence(imageRegistry, baseImageRepo, "test-tag-1")
+	tagExists, err = CheckManifestExistence(imageRegistry, baseImageRepo, "test-tag-1")
 	Expect(err).ToNot(HaveOccurred())
 	Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s:test-tag-1 to exist", baseImageRepo))
 
@@ -218,13 +212,7 @@ func TestBuildImageIndex_DockerFormat(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	baseImageRepo := imageRegistry.GetTestNamespace() + "test-docker-format"
@@ -293,7 +281,7 @@ func TestBuildImageIndex_DockerFormat(t *testing.T) {
 	))
 
 	// Verify the index was pushed to registry
-	tagExists, err := CheckTagExistence(imageRegistry, baseImageRepo, tag)
+	tagExists, err := CheckManifestExistence(imageRegistry, baseImageRepo, tag)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s to exist", indexImage))
 
@@ -360,13 +348,7 @@ func TestBuildImageIndex_SingleImageAlwaysBuildIndex(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	baseImageRepo := imageRegistry.GetTestNamespace() + "test-single-always"
@@ -397,7 +379,7 @@ func TestBuildImageIndex_SingleImageAlwaysBuildIndex(t *testing.T) {
 		Image:            indexImage,
 		Images:           []string{imageWithDigest},
 		BuildahFormat:    "oci",
-		AlwaysBuildIndex: boolptr(true),
+		AlwaysBuildIndex: new(true),
 	}
 
 	output, _, err := RunBuildImageIndex(params, imageRegistry, true)
@@ -412,7 +394,7 @@ func TestBuildImageIndex_SingleImageAlwaysBuildIndex(t *testing.T) {
 	Expect(results.Images).To(Equal(baseImageRepo + "@" + digest))
 
 	// Verify the index was pushed to registry
-	tagExists, err := CheckTagExistence(imageRegistry, baseImageRepo, tag)
+	tagExists, err := CheckManifestExistence(imageRegistry, baseImageRepo, tag)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s to exist", indexImage))
 
@@ -436,13 +418,7 @@ func TestBuildImageIndex_ResultPaths(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	baseImageRepo := imageRegistry.GetTestNamespace() + "test-result-paths"
@@ -530,13 +506,7 @@ func TestBuildImageIndex_FormatMismatch(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	baseImageRepo := imageRegistry.GetTestNamespace() + "test-format-mismatch"
@@ -597,13 +567,7 @@ func TestBuildImageIndex_ImagesWithTagAndDigest(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	baseImageRepo := imageRegistry.GetTestNamespace() + "test-tag-and-digest"
@@ -650,9 +614,9 @@ func TestBuildImageIndex_ImagesWithTagAndDigest(t *testing.T) {
 	params := BuildImageIndexParams{
 		Image:            indexImage,
 		Images:           []string{image1WithTagAndDigest, image2WithTagAndDigest},
-		TLSVerify:        boolptr(true),
+		TLSVerify:        new(true),
 		BuildahFormat:    "oci",
-		AlwaysBuildIndex: boolptr(true),
+		AlwaysBuildIndex: new(true),
 	}
 
 	output, _, err := RunBuildImageIndex(params, imageRegistry, true)
@@ -681,7 +645,7 @@ func TestBuildImageIndex_ImagesWithTagAndDigest(t *testing.T) {
 	))
 
 	// Verify the index was pushed to registry
-	tagExists, err := CheckTagExistence(imageRegistry, baseImageRepo, tag)
+	tagExists, err := CheckManifestExistence(imageRegistry, baseImageRepo, tag)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s to exist", indexImage))
 

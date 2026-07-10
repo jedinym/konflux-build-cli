@@ -139,6 +139,30 @@ func CreateTempDir(prefix string) (string, error) {
 	return tmpDir, nil
 }
 
+// CleanupDir deletes the given directory even if it contains files owned by root or another UUID.
+// To be able to remove not owned files, it starts a container that deletes the directory though a volume.
+func CleanupPath(path string) error {
+	container := NewBuildCliRunnerContainer("kbc-cleanup", TaskRunnerImageRef)
+	defer container.DeleteIfExists()
+
+	container.SetUser("root")
+	container.AddVolumeWithOptions(path, "/workspace", "z")
+
+	if err := container.Start(); err != nil {
+		return err
+	}
+
+	if err := container.ExecuteCommand("bash", "-c", "find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +"); err != nil {
+		return err
+	}
+
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func SaveToTempFile(data []byte) (string, error) {
 	tmpFile, err := os.CreateTemp("", "tmp-*")
 	if err != nil {
@@ -378,4 +402,17 @@ func SetupGomega(t *testing.T) {
 		fmt.Printf("Test Failure: %s\n", message)
 		t.FailNow()
 	})
+}
+
+// Sets up the image registry and registers cleanup.
+func SetupImageRegistry(t *testing.T) ImageRegistry {
+	imageRegistry := NewImageRegistry()
+	err := imageRegistry.Prepare()
+	gomega.Expect(err).ToNot(gomega.HaveOccurred(), "image registry is not configured")
+	err = imageRegistry.Start()
+	gomega.Expect(err).ToNot(gomega.HaveOccurred(), "failed to start local image registry")
+	t.Cleanup(func() {
+		imageRegistry.Stop()
+	})
+	return imageRegistry
 }

@@ -21,6 +21,7 @@ const (
 type prefetchDependenciesTestParams struct {
 	Context             string
 	Input               string
+	OutputDir           string
 	OutputDirMountPoint string
 	EnvFiles            []string
 }
@@ -69,6 +70,9 @@ func runPrefetchDependencies(params prefetchDependenciesTestParams) error {
 	args := []string{
 		"prefetch-dependencies",
 		"--input", params.Input,
+	}
+	if params.OutputDir != "" {
+		args = append(args, "--output-dir", params.OutputDir)
 	}
 	if params.OutputDirMountPoint != "" {
 		args = append(args, "--output-dir-mount-point", params.OutputDirMountPoint)

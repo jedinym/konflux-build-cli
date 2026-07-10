@@ -25,6 +25,8 @@ import (
 
 	"github.com/konflux-ci/konflux-build-cli/integration_tests/constants"
 	. "github.com/konflux-ci/konflux-build-cli/integration_tests/framework"
+
+	"github.com/konflux-ci/konflux-build-cli/pkg/commands"
 	"github.com/konflux-ci/konflux-build-cli/testutil"
 
 	capoProbe "github.com/konflux-ci/capo/pkg/probe"
@@ -99,16 +101,12 @@ type BuildParams struct {
 	ExtraArgs                  []string
 }
 
-func boolptr(v bool) *bool {
-	return &v
-}
-
 // Public interface for parity with ApplyTags. Not used in these tests directly.
-func RunBuild(buildParams BuildParams, imageRegistry ImageRegistry) error {
+func RunBuild(buildParams BuildParams, imageRegistry ImageRegistry) (*commands.BuildResults, error) {
 	storagePath, err := createContainerStorageDir()
 	defer removeContainerStorageDir(storagePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	container, err := setupBuildContainer(buildParams, imageRegistry,
@@ -117,10 +115,20 @@ func RunBuild(buildParams BuildParams, imageRegistry ImageRegistry) error {
 	)
 	defer container.DeleteIfExists()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return runBuild(container, buildParams)
+	stdout, _, err := runBuildWithOutput(container, buildParams)
+	if err != nil {
+		return nil, err
+	}
+
+	buildResults := &commands.BuildResults{}
+	if err := json.Unmarshal([]byte(stdout), &buildResults); err != nil {
+		return nil, err
+	}
+
+	return buildResults, nil
 }
 
 // Creates a temporary directory for container storage in the repository root,
@@ -230,10 +238,13 @@ func cleanupContainerStorageDir(containerStoragePath string) error {
 
 // Creates and starts a container for running builds.
 // The caller is responsible for cleaning up the container.
-// Returns a non-nil container even if an error occurs. The caller should always call
-// DeleteIfExists() on the container for cleanup.
+// Returns a non-nil container even if an error occurs.
+// The caller should always call DeleteIfExists() on the container for cleanup.
 func setupBuildContainer(buildParams BuildParams, imageRegistry ImageRegistry, opts ...ContainerOption) (*TestRunnerContainer, error) {
 	container := NewBuildCliRunnerContainer("kbc-build", BuildImage, opts...)
+	if buildParams.Context == "" {
+		return container, errors.New("Context directory must be set")
+	}
 	// As of buildah v1.44.0, the user running 'buildah build' must own the context directory.
 	// Add :U to make podman change the owner to the container user.
 	mountDir := buildParams.Context
@@ -494,19 +505,6 @@ func setupTestContext(t *testing.T) string {
 		os.RemoveAll(contextDir)
 	})
 	return contextDir
-}
-
-// Sets up the image registry and registers cleanup.
-func setupImageRegistry(t *testing.T) ImageRegistry {
-	imageRegistry := NewImageRegistry()
-	err := imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	t.Cleanup(func() {
-		imageRegistry.Stop()
-	})
-	return imageRegistry
 }
 
 // Writes a Containerfile with the given content to the context directory.
@@ -922,7 +920,7 @@ LABEL test.label="build-test"
 	t.Run("BuildAndPush", func(t *testing.T) {
 		SetupGomega(t)
 
-		imageRegistry := setupImageRegistry(t)
+		imageRegistry := SetupImageRegistry(t)
 
 		contextDir := setupTestContext(t)
 		writeContainerfile(contextDir, fmt.Sprintf(`
@@ -966,7 +964,7 @@ LABEL %s="1h"
 	t.Run("BuildAndPushAdditionalTags", func(t *testing.T) {
 		SetupGomega(t)
 
-		imageRegistry := setupImageRegistry(t)
+		imageRegistry := SetupImageRegistry(t)
 
 		contextDir := setupTestContext(t)
 		writeContainerfile(contextDir, fmt.Sprintf(`
@@ -1017,7 +1015,7 @@ LABEL %s="1h"
 	t.Run("BuildAndPushDockerFormat", func(t *testing.T) {
 		SetupGomega(t)
 
-		imageRegistry := setupImageRegistry(t)
+		imageRegistry := SetupImageRegistry(t)
 
 		contextDir := setupTestContext(t)
 		writeContainerfile(contextDir, fmt.Sprintf(`
@@ -2623,7 +2621,7 @@ LABEL final.stage.label=label-from-final-stage
 			OutputRef:       outputRef,
 			Push:            false,
 			SourceDateEpoch: "1767225600", // 2026-01-01
-			InheritLabels:   boolptr(false),
+			InheritLabels:   new(false),
 			Labels:          []string{"cli.label=label-from-CLI"},
 		}
 
@@ -2671,7 +2669,7 @@ FROM image.does.not/exist:1 AS stage-after-target
 			OutputRef:        outputRef,
 			Push:             false,
 			Target:           "target",
-			SkipUnusedStages: boolptr(false),
+			SkipUnusedStages: new(false),
 		}
 
 		container := setupBuildContainerWithCleanup(t, buildParams, nil)
@@ -2834,7 +2832,7 @@ RUN echo > /dev/udp/127.0.0.1/9
 		t.Run("PrePullImages", func(t *testing.T) {
 			SetupGomega(t)
 
-			imageRegistry := setupImageRegistry(t)
+			imageRegistry := SetupImageRegistry(t)
 
 			createBaseImage := func(name string, randomDataSize int64, base string) string {
 				imageRef := imageRegistry.GetTestNamespace() + name + ":" + "test"
@@ -4048,7 +4046,7 @@ EOF
 			foreignArch = "linux/amd64"
 		}
 
-		imageRegistry := setupImageRegistry(t)
+		imageRegistry := SetupImageRegistry(t)
 		baseImageRepo := imageRegistry.GetTestNamespace() + "wrong-arch-base"
 		tag := GenerateUniqueTag(t)
 		foreignArchImageRef := baseImageRepo + ":" + tag
@@ -4220,7 +4218,7 @@ EOF
 	t.Run("PullImageWithOpaqueWhiteout", func(t *testing.T) {
 		SetupGomega(t)
 
-		imageRegistry := setupImageRegistry(t)
+		imageRegistry := SetupImageRegistry(t)
 
 		// Build a base image with an opaque whiteout and push it to the registry
 		setupBaseImage := func() string {
@@ -4469,7 +4467,7 @@ RUN rm -r /etc/yum.repos.d && mkdir /etc/yum.repos.d
 
 	t.Run("BuildprobeOutput", func(t *testing.T) {
 		// these images are used between tests
-		imageRegistry := setupImageRegistry(t)
+		imageRegistry := SetupImageRegistry(t)
 
 		secondBase := imageRegistry.GetTestNamespace() + "second-base:test"
 		err := CreateTestImage(TestImageConfig{
@@ -4620,7 +4618,7 @@ RUN rm -r /etc/yum.repos.d && mkdir /etc/yum.repos.d
 				Context:          contextDir,
 				OutputRef:        outputRef,
 				BuildprobeOutput: buildprobeYamlPath,
-				SkipUnusedStages: boolptr(false),
+				SkipUnusedStages: new(false),
 			}
 			container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
 			Expect(runBuild(container, buildParams)).To(Succeed())

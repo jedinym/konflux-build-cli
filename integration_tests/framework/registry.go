@@ -87,12 +87,12 @@ func stripRegistryDomain(imageName string) string {
 	return strings.Join(parts, "/")
 }
 
-// Check if the given tag exists in the registry by sending
+// Check if the given manifest exists in the registry by sending
 // a HEAD request to the registry's manifest endpoint.
-func CheckTagExistence(registry ImageRegistry, imageName, tag string) (bool, error) {
+func CheckManifestExistence(registry ImageRegistry, imageName, tagOrDigest string) (bool, error) {
 	imageName = stripRegistryDomain(imageName)
 
-	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry.GetRegistryDomain(), imageName, tag)
+	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry.GetRegistryDomain(), imageName, tagOrDigest)
 	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return false, err

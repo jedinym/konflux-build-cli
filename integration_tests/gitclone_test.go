@@ -12,26 +12,23 @@ import (
 
 	. "github.com/onsi/gomega"
 
+	gitcmd "github.com/konflux-ci/konflux-build-cli/pkg/commands/gitclone"
+
 	. "github.com/konflux-ci/konflux-build-cli/integration_tests/framework"
 )
 
 const gitCloneRunnerImage = TaskRunnerImageRef
 
-type gitCloneResult struct {
-	Commit    string `json:"commit"`
-	MergedSha string `json:"mergedSha,omitempty"`
-}
-
 // parseGitCloneResult finds the last JSON object line in stdout with a non-empty
 // commit field, so unrelated log lines or earlier JSON fragments do not win.
-func parseGitCloneResult(stdout string) (gitCloneResult, error) {
+func parseGitCloneResult(stdout string) (gitcmd.Results, error) {
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
 	for _, line := range slices.Backward(lines) {
 		line := strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") {
 			continue
 		}
-		var r gitCloneResult
+		var r gitcmd.Results
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			continue
 		}
@@ -39,7 +36,7 @@ func parseGitCloneResult(stdout string) (gitCloneResult, error) {
 			return r, nil
 		}
 	}
-	return gitCloneResult{}, fmt.Errorf("no result found")
+	return gitcmd.Results{}, fmt.Errorf("no result found")
 }
 
 func startGitCloneContainer(t *testing.T, workspaceDir string) *TestRunnerContainer {

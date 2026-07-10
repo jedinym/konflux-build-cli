@@ -55,13 +55,7 @@ func TestApplyTags(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	imageRepoUrl := imageRegistry.GetTestNamespace() + "test-image"
@@ -94,7 +88,7 @@ func TestApplyTags(t *testing.T) {
 
 	// Check the result
 	for _, tag := range append(newTagsFromArg, newTagsFromLabel...) {
-		tagExists, err := CheckTagExistence(imageRegistry, imageRepoUrl, tag)
+		tagExists, err := CheckManifestExistence(imageRegistry, imageRepoUrl, tag)
 		Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("failed to check for %s tag existence", tag))
 		Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s:%s to exist", imageRepoUrl, tag))
 	}
@@ -104,13 +98,7 @@ func TestApplyTagsWithImageIndex(t *testing.T) {
 	SetupGomega(t)
 	var err error
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	imageRepoUrl := imageRegistry.GetTestNamespace() + "test-image-index"
@@ -157,7 +145,7 @@ func TestApplyTagsWithImageIndex(t *testing.T) {
 
 	// Check the result
 	for _, tag := range append(newTagsFromArg, newTagsFromLabel...) {
-		tagExists, err := CheckTagExistence(imageRegistry, imageRepoUrl, tag)
+		tagExists, err := CheckManifestExistence(imageRegistry, imageRepoUrl, tag)
 		Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("failed to check for %s tag existence", tag))
 		Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s:%s to exist", imageRepoUrl, tag))
 

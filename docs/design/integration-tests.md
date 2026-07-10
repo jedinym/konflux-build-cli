@@ -108,13 +108,7 @@ func TestMyCommand(t *testing.T) {
     // Includes starting other containers (e.g. registry, git),
     // creation of test files, images, etc.
 
-	// Setup registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+	imageRegistry := SetupImageRegistry(t)
 
 	// Create input data
 	configFilePath, err := createConfigFile(...)
@@ -162,13 +156,8 @@ func TestPipeline(t *testing.T) {
 	var err error
 
 	// Prepare test environment
-	// Setup image registry
-	imageRegistry := NewImageRegistry()
-	err = imageRegistry.Prepare()
-	Expect(err).ToNot(HaveOccurred())
-	err = imageRegistry.Start()
-	Expect(err).ToNot(HaveOccurred())
-	defer imageRegistry.Stop()
+
+	imageRegistry := SetupImageRegistry(t)
 
 	// Pipeline tasks
 
@@ -203,7 +192,7 @@ func TestPipeline(t *testing.T) {
 	Expect(err).ToNot(HaveOccurred())
 	Expect(imageBuildResults.Url).To(HavePrefix(imageRepoUrl + ":" + tag))
 	Expect(imageBuildResults.Digest).To(MatchRegexp(`^sha256:[0-9a-f]{64}$`))
-	builtImageExists, err := CheckTagExistence(imageRegistry, imageBuildResults.Url, tag)
+	builtImageExists, err := CheckManifestExistence(imageRegistry, imageBuildResults.Url, tag)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(builtImageExists).To(BeTrue(), fmt.Sprintf("built image %s:%s does not exist in registry", imageBuildResults.Url, tag))
 
@@ -219,7 +208,7 @@ func TestPipeline(t *testing.T) {
 
 	Expect(err).ToNot(HaveOccurred())
 	for _, tag := range append(newTagsFromArg, additionalTagFromLabel...) {
-		tagExists, err := CheckTagExistence(imageRegistry, imageRepoUrl, tag)
+		tagExists, err := CheckManifestExistence(imageRegistry, imageRepoUrl, tag)
 		Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("failed to check for %s tag existence", tag))
 		Expect(tagExists).To(BeTrue(), fmt.Sprintf("Expected %s:%s to exist", imageRepoUrl, tag))
 	}

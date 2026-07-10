@@ -16,8 +16,8 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		"-c", "safe.directory=" + dir,
 		"-c", "commit.gpgsign=false",
 		"-c", "tag.gpgsign=false",
+		"-c", "core.hooksPath=/dev/null",
 	}, args...)
-
 	stdout, stderr, code, err := cliwrappers.NewCliExecutor().Execute(cliwrappers.Cmd{
 		Name: "git", Args: fullArgs, Dir: dir,
 	})
