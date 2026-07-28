@@ -734,10 +734,6 @@ func Test_Build_detectContainerfile_ignoreFile(t *testing.T) {
 			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
 		}
 
-		cwd, _ := os.Getwd()
-		os.Chdir(tmpDir)
-		defer os.Chdir(cwd)
-
 		err := b.detectContainerfile()
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(b.ignoreFilePath).To(Equal(ignoreFile))
@@ -755,10 +751,6 @@ func Test_Build_detectContainerfile_ignoreFile(t *testing.T) {
 		b := &Build{
 			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
 		}
-
-		cwd, _ := os.Getwd()
-		os.Chdir(tmpDir)
-		defer os.Chdir(cwd)
 
 		err := b.detectContainerfile()
 		g.Expect(err).ToNot(HaveOccurred())
@@ -780,10 +772,6 @@ func Test_Build_detectContainerfile_ignoreFile(t *testing.T) {
 			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
 		}
 
-		cwd, _ := os.Getwd()
-		os.Chdir(tmpDir)
-		defer os.Chdir(cwd)
-
 		err := b.detectContainerfile()
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(b.ignoreFilePath).To(Equal(containerIgnore))
@@ -799,10 +787,6 @@ func Test_Build_detectContainerfile_ignoreFile(t *testing.T) {
 		b := &Build{
 			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
 		}
-
-		cwd, _ := os.Getwd()
-		os.Chdir(tmpDir)
-		defer os.Chdir(cwd)
 
 		err := b.detectContainerfile()
 		g.Expect(err).ToNot(HaveOccurred())
@@ -824,10 +808,6 @@ func Test_Build_detectContainerfile_ignoreFile(t *testing.T) {
 		b := &Build{
 			Params: &BuildParams{Context: tmpDir, Containerfile: "subdir/Containerfile"},
 		}
-
-		cwd, _ := os.Getwd()
-		os.Chdir(tmpDir)
-		defer os.Chdir(cwd)
 
 		err := b.detectContainerfile()
 		g.Expect(err).ToNot(HaveOccurred())

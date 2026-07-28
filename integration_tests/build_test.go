@@ -984,11 +984,15 @@ LABEL test.label="extra-args-test"
 
 		testutil.WriteFileTree(t, contextDir, map[string]string{
 			// Root ignore file excludes the data directory
-			".dockerignore":        "data/\n",
-			"subdir/Containerfile": fmt.Sprintf("FROM %s\nCOPY data/ /data/\nRUN cat /data/hello.txt\n", baseImage),
-			// Per-containerfile ignore file overrides the root one (empty = ignore nothing)
-			"subdir/Containerfile.dockerignore": "# override root .dockerignore\n",
+			".dockerignore": "data/\n",
+			"subdir/Containerfile": fmt.Sprintf(
+				"FROM %s\nCOPY data/ /data/\nRUN cat /data/hello.txt\nRUN test ! -f /data/secret.txt\n",
+				baseImage,
+			),
+			// Per-containerfile ignore file overrides root, but excludes secret.txt
+			"subdir/Containerfile.dockerignore": "data/secret.txt\n",
 			"data/hello.txt":                    "hello from data dir\n",
+			"data/secret.txt":                   "should be excluded\n",
 		})
 
 		outputRef := "localhost/test-per-containerfile-ignorefile:" + GenerateUniqueTag(t)
