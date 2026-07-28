@@ -86,6 +86,7 @@ type BuildahBuildArgs struct {
 	Ulimits          []string
 	SaveStages       bool
 	StageLabels      bool
+	IgnoreFile       string
 	ExtraArgs        []string
 	Wrapper          *WrapperCmd
 }
@@ -198,6 +199,13 @@ func (args *BuildahBuildArgs) MakePathsAbsolute(baseDir string) error {
 
 	if args.BuildArgsFile != "" {
 		err = ensureAbsolute(&args.BuildArgsFile)
+		if err != nil {
+			return err
+		}
+	}
+
+	if args.IgnoreFile != "" {
+		err = ensureAbsolute(&args.IgnoreFile)
 		if err != nil {
 			return err
 		}
@@ -319,6 +327,10 @@ func (b *BuildahCli) Build(args *BuildahBuildArgs) error {
 
 	if args.StageLabels {
 		buildahArgs = append(buildahArgs, "--stage-labels")
+	}
+
+	if args.IgnoreFile != "" {
+		buildahArgs = append(buildahArgs, "--ignorefile="+args.IgnoreFile)
 	}
 
 	// Append extra arguments before the context directory

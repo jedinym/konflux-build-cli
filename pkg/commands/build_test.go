@@ -776,6 +776,101 @@ func Test_Build_detectContainerfile(t *testing.T) {
 	}
 }
 
+func Test_Build_detectContainerfile_ignoreFile(t *testing.T) {
+	t.Run("should detect .containerignore companion file", func(t *testing.T) {
+		g := NewWithT(t)
+		tmpDir := t.TempDir()
+		containerfile := filepath.Join(tmpDir, "Dockerfile")
+		ignoreFile := containerfile + ".containerignore"
+
+		os.WriteFile(containerfile, []byte("FROM scratch\n"), 0644)
+		os.WriteFile(ignoreFile, []byte("*.tmp\n"), 0644)
+
+		b := &Build{
+			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
+		}
+
+		err := b.detectContainerfile()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(b.ignoreFilePath).To(Equal(ignoreFile))
+	})
+
+	t.Run("should detect .dockerignore companion file", func(t *testing.T) {
+		g := NewWithT(t)
+		tmpDir := t.TempDir()
+		containerfile := filepath.Join(tmpDir, "Dockerfile")
+		ignoreFile := containerfile + ".dockerignore"
+
+		os.WriteFile(containerfile, []byte("FROM scratch\n"), 0644)
+		os.WriteFile(ignoreFile, []byte("*.tmp\n"), 0644)
+
+		b := &Build{
+			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
+		}
+
+		err := b.detectContainerfile()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(b.ignoreFilePath).To(Equal(ignoreFile))
+	})
+
+	t.Run("should prefer .containerignore over .dockerignore", func(t *testing.T) {
+		g := NewWithT(t)
+		tmpDir := t.TempDir()
+		containerfile := filepath.Join(tmpDir, "Dockerfile")
+		containerIgnore := containerfile + ".containerignore"
+		dockerIgnore := containerfile + ".dockerignore"
+
+		os.WriteFile(containerfile, []byte("FROM scratch\n"), 0644)
+		os.WriteFile(containerIgnore, []byte("*.tmp\n"), 0644)
+		os.WriteFile(dockerIgnore, []byte("*.log\n"), 0644)
+
+		b := &Build{
+			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
+		}
+
+		err := b.detectContainerfile()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(b.ignoreFilePath).To(Equal(containerIgnore))
+	})
+
+	t.Run("should leave ignoreFilePath empty when no companion file exists", func(t *testing.T) {
+		g := NewWithT(t)
+		tmpDir := t.TempDir()
+		containerfile := filepath.Join(tmpDir, "Dockerfile")
+
+		os.WriteFile(containerfile, []byte("FROM scratch\n"), 0644)
+
+		b := &Build{
+			Params: &BuildParams{Context: tmpDir, Containerfile: "Dockerfile"},
+		}
+
+		err := b.detectContainerfile()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(b.ignoreFilePath).To(BeEmpty())
+	})
+
+	t.Run("should handle subdirectory containerfile path", func(t *testing.T) {
+		g := NewWithT(t)
+		tmpDir := t.TempDir()
+		subDir := filepath.Join(tmpDir, "subdir")
+		os.MkdirAll(subDir, 0755)
+
+		containerfile := filepath.Join(subDir, "Containerfile")
+		ignoreFile := containerfile + ".dockerignore"
+
+		os.WriteFile(containerfile, []byte("FROM scratch\n"), 0644)
+		os.WriteFile(ignoreFile, []byte("*.tmp\n"), 0644)
+
+		b := &Build{
+			Params: &BuildParams{Context: tmpDir, Containerfile: "subdir/Containerfile"},
+		}
+
+		err := b.detectContainerfile()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(b.ignoreFilePath).To(Equal(ignoreFile))
+	})
+}
+
 func Test_Build_setSecretArgs(t *testing.T) {
 	g := NewWithT(t)
 
@@ -1937,6 +2032,37 @@ func Test_Build_Run(t *testing.T) {
 		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
 			buildCalled = true
 			g.Expect(args.Ulimits).To(Equal([]string{"nofile=4096:4096", "nproc=1024:2048"}))
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(buildCalled).To(BeTrue())
+	})
+
+	t.Run("should automatically pass detected ignore file to buildah", func(t *testing.T) {
+		beforeEach()
+		os.WriteFile(filepath.Join(c.Params.Context, "Containerfile.dockerignore"), []byte("*.tmp\n"), 0644)
+
+		buildCalled := false
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			buildCalled = true
+			g.Expect(args.IgnoreFile).To(Equal(filepath.Join(c.Params.Context, "Containerfile.dockerignore")))
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(buildCalled).To(BeTrue())
+	})
+
+	t.Run("should not pass ignore file to buildah when none exists", func(t *testing.T) {
+		beforeEach()
+
+		buildCalled := false
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			buildCalled = true
+			g.Expect(args.IgnoreFile).To(BeEmpty())
 			return nil
 		}
 

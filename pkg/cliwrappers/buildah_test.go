@@ -234,6 +234,48 @@ func TestBuildahCli_Build(t *testing.T) {
 		g.Expect(capturedArgs).To(ContainElement("--build-arg-file=/path/to/build-args-file"))
 	})
 
+	t.Run("should turn IgnoreFile into --ignorefile param", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			g.Expect(cmd.Name).To(Equal("buildah"))
+			capturedArgs = cmd.Args
+			return "", "", 0, nil
+		}
+
+		buildArgs := &cliwrappers.BuildahBuildArgs{
+			Containerfile: containerfile,
+			ContextDir:    contextDir,
+			Tags:          []string{outputRef},
+			IgnoreFile:    "/path/to/Dockerfile.dockerignore",
+		}
+
+		err := buildahCli.Build(buildArgs)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(capturedArgs).To(ContainElement("--ignorefile=/path/to/Dockerfile.dockerignore"))
+	})
+
+	t.Run("should not pass --ignorefile when IgnoreFile is empty", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			capturedArgs = cmd.Args
+			return "", "", 0, nil
+		}
+
+		buildArgs := &cliwrappers.BuildahBuildArgs{
+			Containerfile: containerfile,
+			ContextDir:    contextDir,
+			Tags:          []string{outputRef},
+		}
+
+		err := buildahCli.Build(buildArgs)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(capturedArgs).ToNot(ContainElement(ContainSubstring("--ignorefile")))
+	})
+
 	t.Run("should turn Envs into --env params", func(t *testing.T) {
 		buildahCli, executor := setupBuildahCli()
 		var capturedArgs []string
@@ -998,6 +1040,7 @@ func TestBuildahBuildArgs_MakePathsAbsolute(t *testing.T) {
 				{Name: "additional-context", Location: "/absolute/additional-context"},
 			},
 			BuildArgsFile: "/absolute/path/build-args-file",
+			IgnoreFile:    "/absolute/path/ignorefile",
 		}
 
 		err := args.MakePathsAbsolute("/base/dir")
@@ -1008,6 +1051,7 @@ func TestBuildahBuildArgs_MakePathsAbsolute(t *testing.T) {
 		g.Expect(args.Volumes[0].HostDir).To(Equal("/absolute/path/volume"))
 		g.Expect(args.BuildContexts[0].Location).To(Equal("/absolute/additional-context"))
 		g.Expect(args.BuildArgsFile).To(Equal("/absolute/path/build-args-file"))
+		g.Expect(args.IgnoreFile).To(Equal("/absolute/path/ignorefile"))
 	})
 
 	t.Run("should make relative paths absolute", func(t *testing.T) {
@@ -1024,6 +1068,7 @@ func TestBuildahBuildArgs_MakePathsAbsolute(t *testing.T) {
 				{Name: "additional-context", Location: "relative/additional-context"},
 			},
 			BuildArgsFile: "relative/build-args-file",
+			IgnoreFile:    "relative/ignorefile",
 		}
 
 		err := args.MakePathsAbsolute("/base/dir")
@@ -1034,6 +1079,7 @@ func TestBuildahBuildArgs_MakePathsAbsolute(t *testing.T) {
 		g.Expect(args.Volumes[0].HostDir).To(Equal("/base/dir/relative/volume"))
 		g.Expect(args.BuildContexts[0].Location).To(Equal("/base/dir/relative/additional-context"))
 		g.Expect(args.BuildArgsFile).To(Equal("/base/dir/relative/build-args-file"))
+		g.Expect(args.IgnoreFile).To(Equal("/base/dir/relative/ignorefile"))
 	})
 
 	t.Run("should handle a mix of relative and absolute paths", func(t *testing.T) {
@@ -1092,6 +1138,18 @@ func TestBuildahBuildArgs_MakePathsAbsolute(t *testing.T) {
 		err := args.MakePathsAbsolute("/base/dir")
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(args.BuildArgsFile).To(Equal(""))
+	})
+
+	t.Run("should not modify empty IgnoreFile", func(t *testing.T) {
+		args := &cliwrappers.BuildahBuildArgs{
+			Containerfile: "/absolute/path/Containerfile",
+			ContextDir:    "/absolute/path/context",
+			IgnoreFile:    "",
+		}
+
+		err := args.MakePathsAbsolute("/base/dir")
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(args.IgnoreFile).To(Equal(""))
 	})
 }
 

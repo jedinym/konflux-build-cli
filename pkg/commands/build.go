@@ -559,6 +559,7 @@ type Build struct {
 	parsedBuildahVersion []int
 
 	containerfilePath string
+	ignoreFilePath    string
 
 	// pre-computed buildah arguments
 	buildahSecrets        []cliWrappers.BuildahSecret
@@ -1004,6 +1005,27 @@ func (c *Build) detectContainerfile() error {
 	}
 
 	c.containerfilePath = containerfile
+
+	// Detect per-containerfile ignore files (<containerfile>.containerignore or
+	// <containerfile>.dockerignore). Buildah handles these natively, but the
+	// association breaks when we copy the containerfile to a temp path for
+	// label/ICM injection. We detect the companion file here and later pass it
+	// explicitly via --ignorefile. Root-level .containerignore/.dockerignore
+	// files don't need this treatment because they are resolved relative to the
+	// context directory, which is not affected by the copy.
+	for _, suffix := range []string{".containerignore", ".dockerignore"} {
+		candidate := c.containerfilePath + suffix
+		_, err := os.Stat(candidate)
+		if err == nil {
+			c.ignoreFilePath = candidate
+			l.Logger.Infof("Using per-containerfile ignore file: %s", candidate)
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			l.Logger.Warnf("Could not check for ignore file %s: %s", candidate, err)
+		}
+	}
+
 	return nil
 }
 
@@ -2602,6 +2624,7 @@ func (c *Build) buildImage() (err error) {
 
 	buildArgs := &cliWrappers.BuildahBuildArgs{
 		Containerfile:    containerfilePath,
+		IgnoreFile:       c.ignoreFilePath,
 		ContextDir:       c.effectiveContextDir(),
 		Tags:             c.allTags(),
 		Secrets:          c.buildahSecrets,
