@@ -17,6 +17,7 @@ import (
 	"github.com/konflux-ci/konflux-build-cli/testutil"
 	"github.com/moby/buildkit/frontend/dockerfile/instructions"
 	. "github.com/onsi/gomega"
+	"go.yaml.in/yaml/v3"
 )
 
 func parseDockerfile(t *testing.T, g Gomega, content string) *dockerfile.Dockerfile {
@@ -1233,6 +1234,80 @@ func Test_Build_parseContainerfile(t *testing.T) {
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(MatchRegexp("failed to parse .*: unknown instruction: INVALID"))
 		g.Expect(result).To(BeNil())
+	})
+}
+
+func Test_Build_writeBuildprobeYaml(t *testing.T) {
+	g := NewWithT(t)
+
+	t.Run("successful buildprobe generation", func(t *testing.T) {
+		tempDir := t.TempDir()
+		containerfilePath := filepath.Join(tempDir, "Containerfile")
+		outputPath := filepath.Join(tempDir, "buildprobe.yaml")
+
+		// simple Containerfile
+		containerfileContent := `FROM registry.access.redhat.com/ubi9/ubi:latest
+RUN echo "test"
+`
+		err := os.WriteFile(containerfilePath, []byte(containerfileContent), 0644)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		c := &Build{
+			Params: &BuildParams{
+				OutputRef: "localhost/test:v1.0",
+				BuildArgs: []string{},
+				Target:    "",
+			},
+			containerfilePath: containerfilePath,
+		}
+
+		err = c.writeBuildprobeYaml(outputPath, map[string]string{})
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(outputPath).To(BeAnExistingFile())
+
+		// verify valid yaml
+		data, err := os.ReadFile(outputPath)
+		g.Expect(err).ToNot(HaveOccurred())
+		var metadata interface{}
+		err = yaml.Unmarshal(data, &metadata)
+		g.Expect(err).ToNot(HaveOccurred(), "output should be valid YAML")
+	})
+
+	t.Run("handles missing containerfile", func(t *testing.T) {
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "buildprobe.yaml")
+
+		c := &Build{
+			Params: &BuildParams{
+				OutputRef: "localhost/test:v1.0",
+			},
+			containerfilePath: "/nonexistent/Containerfile",
+		}
+
+		err := c.writeBuildprobeYaml(outputPath, map[string]string{})
+		g.Expect(err).To(HaveOccurred())
+	})
+
+	t.Run("handles unwritable output path", func(t *testing.T) {
+		tempDir := t.TempDir()
+		containerfilePath := filepath.Join(tempDir, "Containerfile")
+
+		containerfileContent := `FROM registry.access.redhat.com/ubi9/ubi:latest
+`
+		err := os.WriteFile(containerfilePath, []byte(containerfileContent), 0644)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		c := &Build{
+			Params: &BuildParams{
+				OutputRef: "localhost/test:v1.0",
+			},
+			containerfilePath: containerfilePath,
+		}
+
+		unwritablePath := "/nonexistent/directory/buildprobe.yaml"
+		err = c.writeBuildprobeYaml(unwritablePath, map[string]string{})
+		g.Expect(err).To(HaveOccurred())
 	})
 }
 

@@ -26,6 +26,9 @@ import (
 	"github.com/konflux-ci/konflux-build-cli/integration_tests/constants"
 	. "github.com/konflux-ci/konflux-build-cli/integration_tests/framework"
 	"github.com/konflux-ci/konflux-build-cli/testutil"
+
+	capoProbe "github.com/konflux-ci/capo/pkg/probe"
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -57,6 +60,7 @@ type BuildParams struct {
 	RewriteTimestamp        bool
 	QuayImageExpiresAfter   string
 	AddLegacyLabels         bool
+	BuildprobeOutput        string
 	ContainerfileJsonOutput string
 	SkipInjections          bool
 	// Defaults to true in the CLI, need a way to distinguish between explicitly false and unset
@@ -326,6 +330,9 @@ func runBuildWithOutput(container *TestRunnerContainer, buildParams BuildParams)
 	}
 	if buildParams.AddLegacyLabels {
 		args = append(args, "--add-legacy-labels")
+	}
+	if buildParams.BuildprobeOutput != "" {
+		args = append(args, "--buildprobe-output", buildParams.BuildprobeOutput)
 	}
 	if buildParams.ContainerfileJsonOutput != "" {
 		args = append(args, "--containerfile-json-output", buildParams.ContainerfileJsonOutput)
@@ -4460,6 +4467,176 @@ RUN rm -r /etc/yum.repos.d && mkdir /etc/yum.repos.d
 			"--syft-select-catalogers should have disabled the RPM DB cataloger")
 	})
 
+	t.Run("BuildprobeOutput", func(t *testing.T) {
+		// these images are used between tests
+		imageRegistry := setupImageRegistry(t)
+
+		secondBase := imageRegistry.GetTestNamespace() + "second-base:test"
+		err := CreateTestImage(TestImageConfig{
+			ImageRef:       secondBase,
+			BaseImage:      "scratch",
+			RandomDataSize: 512,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = PushImage(secondBase)
+		Expect(err).ToNot(HaveOccurred())
+		DeleteLocalImage(secondBase)
+
+		extraImage := imageRegistry.GetTestNamespace() + "extra:test"
+		err = CreateTestImage(TestImageConfig{
+			ImageRef:       extraImage,
+			BaseImage:      "scratch",
+			RandomDataSize: 256,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = PushImage(extraImage)
+		Expect(err).ToNot(HaveOccurred())
+		DeleteLocalImage(extraImage)
+
+		// basic build with two builder stages and one "extra" image
+		t.Run("AllImageTypes", func(t *testing.T) {
+			SetupGomega(t)
+
+			contextDir := setupTestContext(t)
+			outputRef := "localhost/test-buildprobe:" + GenerateUniqueTag(t)
+			writeContainerfile(contextDir, `
+	FROM `+secondBase+` AS second_base
+	FROM `+baseImage+`
+	COPY --from=second_base /random-data.bin /opt/first.bin
+	COPY --from=`+extraImage+` /random-data.bin /opt/extra.bin
+	`)
+			buildprobeYamlPath := "/workspace/buildprobe.yaml"
+			buildParams := BuildParams{
+				Context:          contextDir,
+				OutputRef:        outputRef,
+				BuildprobeOutput: buildprobeYamlPath,
+			}
+			container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+			Expect(runBuild(container, buildParams)).To(Succeed())
+
+			buildprobeYaml, err := container.GetFileContent(buildprobeYamlPath)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should exist")
+			var buildprobeData capoProbe.BuildMetadata
+			err = yaml.Unmarshal([]byte(buildprobeYaml), &buildprobeData)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should be valid")
+			Expect(buildprobeData.Image.Pullspec).To(Equal(outputRef))
+			Expect(buildprobeData.BaseImages).To(HaveLen(2))
+			Expect(buildprobeData.BaseImages[0].Pullspec).To(Equal(secondBase))
+			Expect(buildprobeData.BaseImages[1].Pullspec).To(Equal(baseImage))
+			Expect(buildprobeData.ExtraImages).To(HaveLen(1))
+			Expect(buildprobeData.ExtraImages[0].Pullspec).To(Equal(extraImage))
+		})
+
+		// ensures a "FROM scratch" image is parsed correctly
+		t.Run("FromScratch", func(t *testing.T) {
+			SetupGomega(t)
+
+			contextDir := setupTestContext(t)
+			outputRef := "localhost/test-buildprobe:" + GenerateUniqueTag(t)
+			writeContainerfile(contextDir, `
+	FROM scratch
+	COPY . .
+	`)
+			buildprobeYamlPath := "/workspace/buildprobe.yaml"
+			buildParams := BuildParams{
+				Context:          contextDir,
+				OutputRef:        outputRef,
+				BuildprobeOutput: buildprobeYamlPath,
+			}
+			container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+			Expect(runBuild(container, buildParams)).To(Succeed())
+
+			buildprobeYaml, err := container.GetFileContent(buildprobeYamlPath)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should exist")
+			var buildprobeData capoProbe.BuildMetadata
+			err = yaml.Unmarshal([]byte(buildprobeYaml), &buildprobeData)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should be valid")
+			Expect(buildprobeData.Image.Pullspec).To(Equal(outputRef))
+			Expect(buildprobeData.BaseImages).To(BeEmpty())
+			Expect(buildprobeData.ExtraImages).To(BeEmpty())
+		})
+
+		// ensure build args are properly parsed in buildprobe as they were passed
+		t.Run("BuildArgs", func(t *testing.T) {
+			SetupGomega(t)
+
+			contextDir := setupTestContext(t)
+			outputRef := "localhost/test-buildprobe:" + GenerateUniqueTag(t)
+			writeContainerfile(contextDir, `
+	ARG BASEIMG
+	ARG SECONDIMG
+	FROM $SECONDIMG AS second_base
+	FROM $BASEIMG
+	COPY . .
+	COPY --from=second_base /random-data.bin /opt/first.bin
+	`)
+
+			// set up build args (both from file and directly, to test merging)
+			testutil.WriteFileTree(t, contextDir, map[string]string{
+				"build-args-file": "SECONDIMG=" + secondBase,
+			})
+			buildArgs := []string{
+				"BASEIMG=" + baseImage,
+			}
+
+			buildprobeYamlPath := "/workspace/buildprobe.yaml"
+			buildParams := BuildParams{
+				Context:          contextDir,
+				OutputRef:        outputRef,
+				BuildArgs:        buildArgs,
+				BuildArgsFile:    "/workspace/build-args-file",
+				BuildprobeOutput: buildprobeYamlPath,
+			}
+			container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+			Expect(runBuild(container, buildParams)).To(Succeed())
+
+			buildprobeYaml, err := container.GetFileContent(buildprobeYamlPath)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should exist")
+			var buildprobeData capoProbe.BuildMetadata
+			err = yaml.Unmarshal([]byte(buildprobeYaml), &buildprobeData)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should be valid")
+			Expect(buildprobeData.Image.Pullspec).To(Equal(outputRef))
+			Expect(buildprobeData.ExtraImages).To(BeEmpty())
+			Expect(buildprobeData.BaseImages).To(HaveLen(2))
+			Expect(buildprobeData.BaseImages[0].Pullspec).To(Equal(secondBase))
+			Expect(buildprobeData.BaseImages[1].Pullspec).To(Equal(baseImage))
+		})
+
+		// ensures SkipUnusedStages = false behaves as expected
+		t.Run("DontSkipUnusedStages", func(t *testing.T) {
+			SetupGomega(t)
+
+			contextDir := setupTestContext(t)
+			outputRef := "localhost/test-buildprobe:" + GenerateUniqueTag(t)
+			writeContainerfile(contextDir, `
+	FROM `+secondBase+`
+	COPY . .
+	FROM `+baseImage+`
+	COPY . .
+	`)
+			buildprobeYamlPath := "/workspace/buildprobe.yaml"
+			buildParams := BuildParams{
+				Context:          contextDir,
+				OutputRef:        outputRef,
+				BuildprobeOutput: buildprobeYamlPath,
+				SkipUnusedStages: boolptr(false),
+			}
+			container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+			Expect(runBuild(container, buildParams)).To(Succeed())
+
+			buildprobeYaml, err := container.GetFileContent(buildprobeYamlPath)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should exist")
+			var buildprobeData capoProbe.BuildMetadata
+			err = yaml.Unmarshal([]byte(buildprobeYaml), &buildprobeData)
+			Expect(err).ToNot(HaveOccurred(), "buildprobe file should be valid")
+			Expect(buildprobeData.Image.Pullspec).To(Equal(outputRef))
+			Expect(buildprobeData.ExtraImages).To(BeEmpty())
+			Expect(buildprobeData.BaseImages).To(HaveLen(2))
+			Expect(buildprobeData.BaseImages[0].Pullspec).To(Equal(secondBase))
+			Expect(buildprobeData.BaseImages[1].Pullspec).To(Equal(baseImage))
+		})
+	})
+
 	t.Run("BuilderMetadataOutput", func(t *testing.T) {
 		// Builder metadata tests use --save-stages which saves intermediate images
 		// in buildah storage. Capo finds intermediate images by matching stage alias
@@ -4493,6 +4670,7 @@ COPY --from=builder /opt/app /opt/app
 			buildParams := BuildParams{
 				Context:               contextDir,
 				OutputRef:             outputRef,
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 			}
 
@@ -4539,6 +4717,7 @@ COPY --from=builder /opt/app /opt/app
 			buildParams := BuildParams{
 				Context:               contextDir,
 				OutputRef:             outputRef,
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 				SyftSelectCatalogers:  "-python-installed-package-cataloger",
 			}
@@ -4571,6 +4750,7 @@ LABEL hello=hello
 			buildParams := BuildParams{
 				Context:               contextDir,
 				OutputRef:             outputRef,
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 			}
 
@@ -4587,6 +4767,7 @@ LABEL hello=hello
 			err = json.Unmarshal(metadataBytes, &metadata)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(metadata.Packages).To(BeEmpty(), "single-stage build should result in empty packages in builder metadata")
+
 		})
 
 		t.Run("WithTarget", func(t *testing.T) {
@@ -4611,6 +4792,7 @@ RUN echo "this stage should be ignored"
 				Context:               contextDir,
 				OutputRef:             outputRef,
 				Target:                "middle",
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 			}
 
@@ -4636,6 +4818,7 @@ RUN echo "this stage should be ignored"
 			Expect(metadata.Packages[0].OriginType).To(Equal("intermediate"))
 			Expect(metadata.Packages[0].Pullspec).To(Equal("scratch"))
 			Expect(metadata.Packages[0].StageAlias).To(Equal("builder"))
+
 		})
 
 		t.Run("WithBuildArgs", func(t *testing.T) {
@@ -4659,6 +4842,7 @@ COPY --from=builder $SRC/app /opt/app
 				Context:               contextDir,
 				OutputRef:             outputRef,
 				BuildArgs:             []string{"SRC=/opt"},
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 			}
 
@@ -4683,6 +4867,7 @@ COPY --from=builder $SRC/app /opt/app
 			Expect(metadata.Packages[0].PackageURL).To(Equal("pkg:pypi/app@1.2.3"))
 			Expect(metadata.Packages[0].OriginType).To(Equal("intermediate"))
 			Expect(metadata.Packages[0].StageAlias).To(Equal("builder"))
+
 		})
 
 		t.Run("WithBuildArgsFile", func(t *testing.T) {
@@ -4708,6 +4893,7 @@ COPY --from=builder $SRC_PART_1$SRC_PART_2/app /opt/app
 				Context:               contextDir,
 				OutputRef:             outputRef,
 				BuildArgsFile:         "/workspace/build-args-file",
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 			}
 
@@ -4732,6 +4918,7 @@ COPY --from=builder $SRC_PART_1$SRC_PART_2/app /opt/app
 			Expect(metadata.Packages[0].PackageURL).To(Equal("pkg:pypi/app@1.2.3"))
 			Expect(metadata.Packages[0].OriginType).To(Equal("intermediate"))
 			Expect(metadata.Packages[0].StageAlias).To(Equal("builder"))
+
 		})
 
 		t.Run("WithEnvVars", func(t *testing.T) {
@@ -4754,6 +4941,7 @@ COPY --from=builder $SRC/app /opt/app
 				Context:               contextDir,
 				OutputRef:             outputRef,
 				Envs:                  []string{"SRC=/opt"},
+				BuildprobeOutput:      "/workspace/buildprobe.yaml",
 				BuilderMetadataOutput: "/workspace/builder-metadata.json",
 			}
 
@@ -4778,6 +4966,7 @@ COPY --from=builder $SRC/app /opt/app
 			Expect(metadata.Packages[0].PackageURL).To(Equal("pkg:pypi/app@1.2.3"))
 			Expect(metadata.Packages[0].OriginType).To(Equal("intermediate"))
 			Expect(metadata.Packages[0].StageAlias).To(Equal("builder"))
+
 		})
 	})
 }
