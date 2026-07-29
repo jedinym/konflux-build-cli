@@ -167,10 +167,6 @@ func (pd *PrefetchDependencies) Run() error {
 		return fmt.Errorf("hermeto inject-files command failed: %w", err)
 	}
 
-	if err := renameRepoFiles(pd.Config.OutputDir); err != nil {
-		return fmt.Errorf("failed to rename hermeto.repo files: %w", err)
-	}
-
 	return nil
 }
 
