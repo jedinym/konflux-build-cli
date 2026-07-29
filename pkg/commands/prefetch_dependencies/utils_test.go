@@ -9,63 +9,6 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestRenameRepoFiles(t *testing.T) {
-	g := NewWithT(t)
-
-	const exampleContent = `
-	[repo]
-	name=test
-	baseurl=https://test.com
-	enabled=1
-	`
-
-	t.Run("should succeed if no repo files are found", func(t *testing.T) {
-		tempDir := t.TempDir()
-
-		g.Expect(renameRepoFiles(tempDir)).To(Succeed())
-
-		entries, _ := os.ReadDir(tempDir)
-		g.Expect(entries).To(BeEmpty())
-	})
-
-	t.Run("should rename one repo file", func(t *testing.T) {
-		tempDir := t.TempDir()
-		repoFile := filepath.Join(tempDir, "hermeto.repo")
-
-		g.Expect(os.WriteFile(repoFile, []byte(exampleContent), 0644)).To(Succeed())
-
-		g.Expect(renameRepoFiles(tempDir)).To(Succeed())
-
-		expectedRepoFile := filepath.Join(tempDir, "cachi2.repo")
-		content, _ := os.ReadFile(expectedRepoFile)
-		g.Expect(string(content)).To(Equal(exampleContent))
-
-		g.Expect(repoFile).ToNot(BeAnExistingFile())
-	})
-
-	t.Run("should rename multiple repo files", func(t *testing.T) {
-		tempDir := t.TempDir()
-		archs := []string{"aarch64", "x86_64", "arm64"}
-		for _, arch := range archs {
-			g.Expect(os.MkdirAll(filepath.Join(tempDir, arch), 0755)).To(Succeed())
-			g.Expect(os.WriteFile(filepath.Join(tempDir, arch, "hermeto.repo"), []byte(exampleContent), 0644)).To(Succeed())
-		}
-
-		g.Expect(renameRepoFiles(tempDir)).To(Succeed())
-
-		for _, arch := range archs {
-			expectedRepoFile := filepath.Join(tempDir, arch, "cachi2.repo")
-			content, _ := os.ReadFile(expectedRepoFile)
-			g.Expect(string(content)).To(Equal(exampleContent))
-		}
-
-		for _, arch := range archs {
-			repoFile := filepath.Join(tempDir, arch, "hermeto.repo")
-			g.Expect(repoFile).ToNot(BeAnExistingFile())
-		}
-	})
-}
-
 func TestParseInput(t *testing.T) {
 	g := NewWithT(t)
 

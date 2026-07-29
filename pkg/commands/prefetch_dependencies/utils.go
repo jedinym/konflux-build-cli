@@ -16,41 +16,6 @@ import (
 
 const readOnlyFileMode = os.FileMode(0444)
 
-// Rename repo files in the output directory to expected cachi2.repo.
-func renameRepoFiles(outputDir string) error {
-	var repoFiles []string
-
-	log.Debugf("Searching for repo files in %s", outputDir)
-	err := filepath.WalkDir(outputDir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		// Hermeto will create a hermeto.repo file when processing RPMs (one for each architecture).
-		if !entry.IsDir() && filepath.Base(path) == "hermeto.repo" {
-			repoFiles = append(repoFiles, path)
-		}
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	for _, repoFile := range repoFiles {
-		// TODO: Change cachi2.repo to a more generic name like prefetch.repo or do not rename at all.
-		newRepoFile := filepath.Join(filepath.Dir(repoFile), "cachi2.repo")
-		if err := os.Rename(repoFile, newRepoFile); err != nil {
-			return err
-		}
-		log.Debugf("Successfully renamed %s to %s", repoFile, newRepoFile)
-	}
-
-	if len(repoFiles) == 0 {
-		log.Debug("No repo files found")
-	}
-	return nil
-}
-
 // Parse the user input to a valid JSON object.
 func parseInput(input string) any {
 	var result any

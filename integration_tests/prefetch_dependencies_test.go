@@ -130,9 +130,8 @@ func TestPrefetchDependencies(t *testing.T) {
 		Expect(sbom).To(HaveKey("packages"))
 		Expect(sbom["packages"]).ToNot(BeEmpty())
 
-		// Check repo files.
+		// Check repo file.
 		var hermetoRepoCount int
-		var cachi2RepoCount int
 		filepath.WalkDir(filepath.Join(repoPath, "prefetch-output"), func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -140,13 +139,9 @@ func TestPrefetchDependencies(t *testing.T) {
 			if !entry.IsDir() && entry.Name() == "hermeto.repo" {
 				hermetoRepoCount++
 			}
-			if !entry.IsDir() && entry.Name() == "cachi2.repo" {
-				cachi2RepoCount++
-			}
 			return nil
 		})
-		Expect(hermetoRepoCount).To(BeNumerically("==", 0))
-		Expect(cachi2RepoCount).To(BeNumerically(">", 0))
+		Expect(hermetoRepoCount).To(BeNumerically(">", 0))
 	})
 
 	t.Run("should generate environment files with specified formats", func(t *testing.T) {
