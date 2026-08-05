@@ -44,6 +44,10 @@ func getPackageProxyConfiguration() ([]string, error) {
 		envEntry := fmt.Sprintf("HERMETO_BUNDLER__PROXY_URL=%s", packageProxyConfig.BundlerProxy)
 		hermetoEnv = append(hermetoEnv, envEntry)
 	}
+	if packageProxyConfig.CargoProxy != "" {
+		envEntry := fmt.Sprintf("HERMETO_CARGO__PROXY_URL=%s", packageProxyConfig.CargoProxy)
+		hermetoEnv = append(hermetoEnv, envEntry)
+	}
 	if packageProxyConfig.GomodProxy != "" {
 		envEntry := fmt.Sprintf("HERMETO_GOMOD__PROXY_URL=%s", packageProxyConfig.GomodProxy)
 		hermetoEnv = append(hermetoEnv, envEntry)
