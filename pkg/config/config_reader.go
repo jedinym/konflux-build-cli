@@ -21,11 +21,12 @@ type KonfluxRawConfig struct {
 	NoProxy         string
 
 	// Package registry proxy URLs
-	HermetoGomodProxy string
-	HermetoNpmProxy   string
-	HermetoPipProxy   string
-	HermetoPnpmProxy  string
-	HermetoYarnProxy  string
+	HermetoBundlerProxy string
+	HermetoGomodProxy   string
+	HermetoNpmProxy     string
+	HermetoPipProxy     string
+	HermetoPnpmProxy    string
+	HermetoYarnProxy    string
 	// Global setting allowing of forbidding usage of package registry proxies on the cluster level.
 	HermetoPackageRegistryProxyAllowed string
 }
@@ -68,6 +69,7 @@ func (k *K8sConfigMapReader) ReadConfigData() (*KonfluxRawConfig, error) {
 		HttpProxy:       configMap.Data["http-proxy"],
 		NoProxy:         configMap.Data["no-proxy"],
 
+		HermetoBundlerProxy:                configMap.Data["package-registry-proxy-bundler-url"],
 		HermetoGomodProxy:                  configMap.Data["package-registry-proxy-gomod-url"],
 		HermetoNpmProxy:                    configMap.Data["package-registry-proxy-npm-url"],
 		HermetoPipProxy:                    configMap.Data["package-registry-proxy-pip-url"],
@@ -95,6 +97,7 @@ func (y *IniFileReader) ReadConfigData() (*KonfluxRawConfig, error) {
 		HttpProxy:       cfg.Section("cache-proxy").Key("http-proxy").String(),
 		NoProxy:         cfg.Section("cache-proxy").Key("no-proxy").String(),
 
+		HermetoBundlerProxy:                cfg.Section("artifact-registry").Key("package-registry-proxy-bundler-url").String(),
 		HermetoGomodProxy:                  cfg.Section("artifact-registry").Key("package-registry-proxy-gomod-url").String(),
 		HermetoNpmProxy:                    cfg.Section("artifact-registry").Key("package-registry-proxy-npm-url").String(),
 		HermetoPipProxy:                    cfg.Section("artifact-registry").Key("package-registry-proxy-pip-url").String(),
