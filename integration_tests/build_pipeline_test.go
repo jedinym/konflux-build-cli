@@ -43,8 +43,8 @@ func TestBuildPipeline(t *testing.T) {
 	// Use container to clean up the data since some files might be created with owner root.
 	defer CleanupPath(workspaceDirHost)
 
-	const sourceDir = "source"
-	sourceDirHost := path.Join(workspaceDirHost, sourceDir)
+	const sourceDirName = "source"
+	sourceDirHost := path.Join(workspaceDirHost, sourceDirName)
 
 	Expect(os.MkdirAll(sourceDirHost, 0755)).To(Succeed())
 	// Chmod to 0777 to allow the container user to write to the directory.
@@ -53,8 +53,10 @@ func TestBuildPipeline(t *testing.T) {
 	Expect(os.Chmod(sourceDirHost, 0777)).To(Succeed())
 
 	const gitUrl = "https://github.com/konflux-ci/konflux-build-cli"
+	const gitBranch = "main"
+	const contextDir = "integration_tests/sample-projects/url-preview/"
 	outputImageName := imageRegistry.GetTestNamespace() + "test-image-build"
-	outputImageTag := "result"
+	const outputImageTag = "result"
 	newTag := time.Now().Format("2006-01-02_15-04-05")
 	newTagFromLabel := "label-" + newTag
 
@@ -106,7 +108,7 @@ func TestBuildPipeline(t *testing.T) {
 
 		container := startGitCloneContainer(t, workspaceDirHost)
 
-		args := []string{"git-clone", "--url", gitUrl, "--output-dir", path.Join("/workspace", sourceDir)}
+		args := []string{"git-clone", "--url", gitUrl, "--revision", gitBranch, "--output-dir", path.Join("/workspace", sourceDirName)}
 		stdout, _, err := container.ExecuteBuildCliWithOutput(args...)
 		Expect(err).ToNot(HaveOccurred(), "git clone failed")
 
@@ -123,11 +125,11 @@ func TestBuildPipeline(t *testing.T) {
 		SetupGomega(t)
 
 		err := runPrefetchDependencies(prefetchDependenciesTestParams{
-			Input:               `{"packages": [{"type": "gomod"}]}`,
-			Context:             sourceDirHost,
-			OutputDir:           prefetchOutputDir,
+			SourceDir:           sourceDirHost,
+			Input:               fmt.Sprintf(`{"packages": [{"type": "gomod", "path": "%s"}]}`, contextDir),
+			OutputDir:           path.Join(contextDir, prefetchOutputDir),
 			OutputDirMountPoint: prefetchOutputMountPoint,
-			EnvFiles:            []string{prefetchEnvJsonFile},
+			EnvFiles:            []string{path.Join(contextDir, prefetchEnvJsonFile)},
 		})
 		Expect(err).ToNot(HaveOccurred(), "prefetch failed")
 	})
@@ -138,10 +140,11 @@ func TestBuildPipeline(t *testing.T) {
 
 		outputImageRef := outputImageName + ":" + runtime.GOARCH
 		buildParams := BuildParams{
-			Context:               sourceDirHost,
+			Source:                sourceDirHost,
+			Context:               contextDir,
 			OutputRef:             outputImageRef,
 			Hermetic:              true,
-			PrefetchDir:           path.Join("/workspace", prefetchDir),
+			PrefetchDir:           path.Join("/workspace", contextDir, prefetchDir),
 			PrefetchOutputMount:   prefetchOutputMountPoint,
 			Push:                  true,
 			QuayImageExpiresAfter: "1h",
@@ -236,6 +239,7 @@ func TestBuildPipeline(t *testing.T) {
 			imageUrl:  outputImageName,
 			digest:    buildImageIndexResults.ImageDigest,
 			source:    "/workspace/source",
+			context:   contextDir,
 			tagSuffix: tagSuffix,
 		}
 		pushContainerfileResults, err = RunPushContainerfile(pushContainerfileParams, imageRegistry, sourceDirHost)
@@ -263,9 +267,9 @@ func TestBuildPipeline(t *testing.T) {
 
 		Expect(manifest.Layers).To(HaveLen(1))
 		layerDescriptor := manifest.Layers[0]
-		Expect(layerDescriptor.Annotations).To(HaveKeyWithValue("org.opencontainers.image.title", "Dockerfile"))
+		Expect(layerDescriptor.Annotations).To(HaveKeyWithValue("org.opencontainers.image.title", "Containerfile"))
 
-		containerfileContent, err := os.ReadFile(path.Join(sourceDirHost, "Dockerfile"))
+		containerfileContent, err := os.ReadFile(path.Join(sourceDirHost, contextDir, "Containerfile"))
 		Expect(err).ToNot(HaveOccurred())
 		expectedLayerDigest := "sha256:" + sha256Checksum(string(containerfileContent))
 		Expect(string(layerDescriptor.Digest)).To(Equal(expectedLayerDigest))

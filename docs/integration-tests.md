@@ -39,7 +39,8 @@ For example, in case of VSCode, go to setting and change `Go: Test Timeout`
 or create / modify config file `.vscode/settings.json`:
 ```json
 {
-    "go.testTimeout": "600s"
+    "go.testTimeout": "600s",
+    "go.testTags": "exclude_graphdriver_btrfs"
 }
 ```
 

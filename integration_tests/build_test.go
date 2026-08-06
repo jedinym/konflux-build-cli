@@ -101,7 +101,7 @@ type BuildParams struct {
 	ExtraArgs                  []string
 }
 
-// Public interface for parity with ApplyTags. Not used in these tests directly.
+// Public interface for use within pipeline tests. Not used in these tests directly.
 func RunBuild(buildParams BuildParams, imageRegistry ImageRegistry) (*commands.BuildResults, error) {
 	storagePath, err := createContainerStorageDir()
 	defer removeContainerStorageDir(storagePath)
