@@ -1,0 +1,26 @@
+# Build the url-preview sample service binary.
+FROM docker.io/library/golang:1.26-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o url-preview .
+
+# Run the service from a minimal image. distroless/static already bundles
+# a CA trust store and a non-root "nonroot" user (uid 65532).
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=builder /workspace/url-preview ./url-preview
+COPY --from=builder /workspace/static ./static
+
+ENV PORT=8080
+ENV REQUEST_TIMEOUT_SECONDS=10
+EXPOSE 8080
+
+ENTRYPOINT ["./url-preview"]
