@@ -3026,7 +3026,11 @@ func (c *Build) scanBuilderContent(buildArgs map[string]string) (err error) {
 	}
 
 	scanner, err := capo.NewScanner(
-		capo.WithLogger(slog.New(sloglogrus.Option{Logger: l.Logger}.NewLogrusHandler())),
+		capo.WithLogger(
+			slog.New(
+				sloglogrus.Option{Logger: l.Logger}.NewLogrusHandler(),
+			).With("logger", "capo"),
+		),
 		capo.WithDefaultCatalogersTag("image"),
 		capo.WithSelectCatalogers(selectCatalogers...),
 	)
