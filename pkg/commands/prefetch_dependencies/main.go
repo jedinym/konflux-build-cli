@@ -40,6 +40,14 @@ func getPackageProxyConfiguration() ([]string, error) {
 	}
 	// Note that empty URLs must be sanitized here, or it would result in validation
 	// error in Hermeto.
+	if packageProxyConfig.BundlerProxy != "" {
+		envEntry := fmt.Sprintf("HERMETO_BUNDLER__PROXY_URL=%s", packageProxyConfig.BundlerProxy)
+		hermetoEnv = append(hermetoEnv, envEntry)
+	}
+	if packageProxyConfig.CargoProxy != "" {
+		envEntry := fmt.Sprintf("HERMETO_CARGO__PROXY_URL=%s", packageProxyConfig.CargoProxy)
+		hermetoEnv = append(hermetoEnv, envEntry)
+	}
 	if packageProxyConfig.GomodProxy != "" {
 		envEntry := fmt.Sprintf("HERMETO_GOMOD__PROXY_URL=%s", packageProxyConfig.GomodProxy)
 		hermetoEnv = append(hermetoEnv, envEntry)

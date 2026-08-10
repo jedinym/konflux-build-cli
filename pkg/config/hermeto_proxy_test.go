@@ -9,11 +9,13 @@ import (
 )
 
 const (
-	testGomodProxy = "test-gomod-proxy.io"
-	testNpmProxy   = "test-npm-proxy.io"
-	testPipProxy   = "test-pip-proxy.io"
-	testPnpmProxy  = "test-pnpm-proxy.io"
-	testYarnProxy  = "test-yarn-proxy.io"
+	testBundlerProxy = "test-bundler-proxy.io"
+	testCargoProxy   = "test-cargo-proxy.io"
+	testGomodProxy   = "test-gomod-proxy.io"
+	testNpmProxy     = "test-npm-proxy.io"
+	testPipProxy     = "test-pip-proxy.io"
+	testPnpmProxy    = "test-pnpm-proxy.io"
+	testYarnProxy    = "test-yarn-proxy.io"
 )
 
 func Test_NewHermetoProxyConfig(t *testing.T) {
@@ -22,6 +24,8 @@ func Test_NewHermetoProxyConfig(t *testing.T) {
 	t.Run("should create hermeto proxy config", func(t *testing.T) {
 		rawConfig := config.KonfluxRawConfig{
 			HermetoPackageRegistryProxyAllowed: "true",
+			HermetoBundlerProxy:                testBundlerProxy,
+			HermetoCargoProxy:                  testCargoProxy,
 			HermetoGomodProxy:                  testGomodProxy,
 			HermetoNpmProxy:                    testNpmProxy,
 			HermetoPipProxy:                    testPipProxy,
@@ -32,6 +36,8 @@ func Test_NewHermetoProxyConfig(t *testing.T) {
 		hermetoProxyConfig, err := config.NewHermetoProxyConfig(rawConfig)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(hermetoProxyConfig.PackageRegistryProxyAllowed).To(BeTrue())
+		g.Expect(hermetoProxyConfig.BundlerProxy).To(Equal(testBundlerProxy))
+		g.Expect(hermetoProxyConfig.CargoProxy).To(Equal(testCargoProxy))
 		g.Expect(hermetoProxyConfig.GomodProxy).To(Equal(testGomodProxy))
 		g.Expect(hermetoProxyConfig.NpmProxy).To(Equal(testNpmProxy))
 		g.Expect(hermetoProxyConfig.PipProxy).To(Equal(testPipProxy))
@@ -42,6 +48,8 @@ func Test_NewHermetoProxyConfig(t *testing.T) {
 	t.Run("should create hermeto proxy config if parse error happens", func(t *testing.T) {
 		rawConfig := config.KonfluxRawConfig{
 			HermetoPackageRegistryProxyAllowed: "abcd",
+			HermetoBundlerProxy:                testBundlerProxy,
+			HermetoCargoProxy:                  testCargoProxy,
 			HermetoGomodProxy:                  testGomodProxy,
 			HermetoNpmProxy:                    testNpmProxy,
 			HermetoPipProxy:                    testPipProxy,
@@ -52,6 +60,8 @@ func Test_NewHermetoProxyConfig(t *testing.T) {
 		hermetoProxyConfig, err := config.NewHermetoProxyConfig(rawConfig)
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(hermetoProxyConfig.PackageRegistryProxyAllowed).To(BeFalse())
+		g.Expect(hermetoProxyConfig.BundlerProxy).To(Equal(testBundlerProxy))
+		g.Expect(hermetoProxyConfig.CargoProxy).To(Equal(testCargoProxy))
 		g.Expect(hermetoProxyConfig.GomodProxy).To(Equal(testGomodProxy))
 		g.Expect(hermetoProxyConfig.NpmProxy).To(Equal(testNpmProxy))
 		g.Expect(hermetoProxyConfig.PipProxy).To(Equal(testPipProxy))
@@ -65,6 +75,8 @@ func Test_NewHermetoProxyConfig(t *testing.T) {
 		hermetoProxyConfig, err := config.NewHermetoProxyConfig(rawConfig)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(hermetoProxyConfig.PackageRegistryProxyAllowed).To(BeFalse())
+		g.Expect(hermetoProxyConfig.BundlerProxy).To(BeEmpty())
+		g.Expect(hermetoProxyConfig.CargoProxy).To(BeEmpty())
 		g.Expect(hermetoProxyConfig.GomodProxy).To(BeEmpty())
 		g.Expect(hermetoProxyConfig.NpmProxy).To(BeEmpty())
 		g.Expect(hermetoProxyConfig.PipProxy).To(BeEmpty())
@@ -79,6 +91,8 @@ func Test_HermetoProxyConfig_DeepCopy(t *testing.T) {
 	t.Run("should deep copy hermeto proxy config", func(t *testing.T) {
 		hermetoProxyConfig := &config.HermetoProxyConfig{
 			PackageRegistryProxyAllowed: true,
+			BundlerProxy:                testBundlerProxy,
+			CargoProxy:                  testCargoProxy,
 			GomodProxy:                  testGomodProxy,
 			NpmProxy:                    testNpmProxy,
 			PipProxy:                    testPipProxy,
@@ -89,6 +103,8 @@ func Test_HermetoProxyConfig_DeepCopy(t *testing.T) {
 		HermetoProxyConfigCopy := hermetoProxyConfig.DeepCopy()
 
 		hermetoProxyConfig.PackageRegistryProxyAllowed = false
+		hermetoProxyConfig.BundlerProxy = "bundler-proxy"
+		hermetoProxyConfig.CargoProxy = "cargo-proxy"
 		hermetoProxyConfig.GomodProxy = "gomod-proxy"
 		hermetoProxyConfig.NpmProxy = "npm-proxy"
 		hermetoProxyConfig.PipProxy = "pip-proxy"
@@ -96,6 +112,8 @@ func Test_HermetoProxyConfig_DeepCopy(t *testing.T) {
 		hermetoProxyConfig.YarnProxy = "yarn-proxy"
 
 		g.Expect(HermetoProxyConfigCopy.PackageRegistryProxyAllowed).To(BeTrue())
+		g.Expect(HermetoProxyConfigCopy.BundlerProxy).To(Equal(testBundlerProxy))
+		g.Expect(HermetoProxyConfigCopy.CargoProxy).To(Equal(testCargoProxy))
 		g.Expect(HermetoProxyConfigCopy.GomodProxy).To(Equal(testGomodProxy))
 		g.Expect(HermetoProxyConfigCopy.NpmProxy).To(Equal(testNpmProxy))
 		g.Expect(HermetoProxyConfigCopy.PipProxy).To(Equal(testPipProxy))
@@ -109,6 +127,8 @@ func Test_HermetoProxyConfig_ToString(t *testing.T) {
 
 	hermetoProxyConfig := &config.HermetoProxyConfig{
 		PackageRegistryProxyAllowed: true,
+		BundlerProxy:                "test-bundler-proxy.io",
+		CargoProxy:                  "test-cargo-proxy.io",
 		GomodProxy:                  "test-gomod-proxy.io",
 		NpmProxy:                    "test-npm-proxy.io",
 		PipProxy:                    "test-pip-proxy.io",
