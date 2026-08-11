@@ -44,9 +44,9 @@ func CheckSymlinks(dir string, excludePatterns []string) error {
 				return nil
 			}
 
-			resolvedTarget, err := ResolvePath(path)
+			resolvedTarget, err := ResolvePathAllowMissing(path)
 			if err != nil {
-				l.Logger.Errorf("Broken symlink found: %s", path)
+				l.Logger.Errorf("Cannot resolve symlink: %s: %v", path, err)
 				invalidSymlinks = append(invalidSymlinks, path)
 				return nil //nolint:nilerr
 			}

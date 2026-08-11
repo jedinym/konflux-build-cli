@@ -143,15 +143,27 @@ func TestCheckSymlinks(t *testing.T) {
 		}
 	})
 
-	t.Run("fails on broken symlink when not excluded", func(t *testing.T) {
+	t.Run("passes on broken symlink pointing within directory", func(t *testing.T) {
 		dir := t.TempDir()
 		link := filepath.Join(dir, "broken")
 		if err := os.Symlink(filepath.Join(dir, "missing-target"), link); err != nil {
 			t.Fatal(err)
 		}
 
+		if err := CheckSymlinks(dir, nil); err != nil {
+			t.Fatalf("expected pass for broken symlink within directory: %v", err)
+		}
+	})
+
+	t.Run("fails on broken symlink pointing outside directory", func(t *testing.T) {
+		dir := t.TempDir()
+		link := filepath.Join(dir, "broken")
+		if err := os.Symlink("/nonexistent/outside/target", link); err != nil {
+			t.Fatal(err)
+		}
+
 		if err := CheckSymlinks(dir, nil); err == nil {
-			t.Fatal("expected error for broken symlink")
+			t.Fatal("expected error for broken symlink pointing outside directory")
 		}
 	})
 
@@ -247,6 +259,165 @@ func TestCheckSymlinks(t *testing.T) {
 
 		if err := CheckSymlinks(dir, []string{"..foo/*"}); err != nil {
 			t.Fatalf("expected exclusion to match ..foo path inside checkout: %v", err)
+		}
+	})
+
+	t.Run("passes on valid internal symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target")
+		if err := os.WriteFile(target, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err != nil {
+			t.Fatalf("expected pass for valid internal symlink: %v", err)
+		}
+	})
+
+	t.Run("passes on relative dotdot symlink staying within directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "file"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sub := filepath.Join(dir, "sub")
+		if err := os.Mkdir(sub, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../file", filepath.Join(sub, "link")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err != nil {
+			t.Fatalf("expected pass for relative .. symlink within directory: %v", err)
+		}
+	})
+
+	t.Run("fails on relative dotdot symlink escaping directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Symlink("../../outside", filepath.Join(dir, "escape")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err == nil {
+			t.Fatal("expected error for relative .. symlink escaping directory")
+		}
+	})
+
+	t.Run("fails on symlink chain escaping directory", func(t *testing.T) {
+		dir := t.TempDir()
+		// a -> b, b -> /nonexistent/outside
+		if err := os.Symlink("/nonexistent/outside", filepath.Join(dir, "b")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("b", filepath.Join(dir, "a")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err == nil {
+			t.Fatal("expected error for symlink chain escaping directory")
+		}
+	})
+
+	t.Run("fails on dotdot through directory symlink escaping", func(t *testing.T) {
+		dir := t.TempDir()
+		// root-ref -> <dir>  (symlink pointing to the checkout root)
+		// escape -> root-ref/../nonexistent
+		// Filesystem: root-ref resolves to dir, ../nonexistent from dir goes
+		// above dir, so the target escapes.
+		if err := os.Symlink(dir, filepath.Join(dir, "root-ref")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("root-ref/../nonexistent", filepath.Join(dir, "escape")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err == nil {
+			t.Fatal("expected error for .. through directory symlink escaping")
+		}
+	})
+
+	t.Run("passes on dotdot through directory symlink staying inside", func(t *testing.T) {
+		dir := t.TempDir()
+		// shortcut -> a/b          (valid internal directory symlink)
+		// tricky   -> shortcut/../../nonexistent
+		//
+		// Filesystem: shortcut -> dir/a/b, ../../nonexistent from dir/a/b
+		// -> dir/nonexistent (inside). Must not be a false positive.
+		if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("a/b", filepath.Join(dir, "shortcut")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("shortcut/../../nonexistent", filepath.Join(dir, "tricky")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err != nil {
+			t.Fatalf("expected pass for dotdot through directory symlink staying inside: %v", err)
+		}
+	})
+
+	t.Run("fails on symlink chain escaping even when intermediate link is excluded", func(t *testing.T) {
+		dir := t.TempDir()
+		// a -> b, b -> /nonexistent/outside
+		// b is excluded, but a must still be caught via chain resolution.
+		if err := os.Symlink("/nonexistent/outside", filepath.Join(dir, "b")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("b", filepath.Join(dir, "a")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, []string{"b"}); err == nil {
+			t.Fatal("expected error for symlink chain escaping when intermediate link is excluded")
+		}
+	})
+
+	t.Run("fails on symlink loop within directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Symlink("b", filepath.Join(dir, "a")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("a", filepath.Join(dir, "b")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err == nil {
+			t.Fatal("expected error for symlink loop within directory")
+		}
+	})
+
+	t.Run("fails on directory symlink to external directory", func(t *testing.T) {
+		dir := t.TempDir()
+		externalDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(externalDir, "secret"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(externalDir, filepath.Join(dir, "ext")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := CheckSymlinks(dir, nil); err == nil {
+			t.Fatal("expected error for directory symlink pointing outside")
+		}
+	})
+
+	t.Run("reports all escaping symlinks", func(t *testing.T) {
+		dir := t.TempDir()
+		mustExternalSymlink(t, dir, "bad1")
+		mustExternalSymlink(t, dir, "bad2")
+		mustExternalSymlink(t, dir, "bad3")
+
+		err := CheckSymlinks(dir, nil)
+		if err == nil {
+			t.Fatal("expected error for multiple escaping symlinks")
+		}
+		if !strings.Contains(err.Error(), "3 symlink(s)") {
+			t.Fatalf("expected error to mention 3 symlinks, got: %v", err)
 		}
 	})
 }

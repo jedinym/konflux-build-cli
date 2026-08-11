@@ -204,6 +204,49 @@ func prepareBareRepoWithTwoSubmodules(t *testing.T, root string) string {
 	return revision
 }
 
+// prepareBareRepoWithBrokenInternalSymlink creates a bare repo containing a
+// broken symlink whose target does not exist but resolves within the repo.
+func prepareBareRepoWithBrokenInternalSymlink(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, "_broken-symlink")
+	initGitRepo(t, dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("ok\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nonexistent-file", filepath.Join(dir, "broken.link")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "broken internal symlink")
+
+	bareCloneToPath(t, dir, filepath.Join(root, "broken-symlink-bare.git"))
+	_ = os.RemoveAll(dir)
+}
+
+// prepareBareRepoWithSymlinkChain creates a bare repo containing a symlink
+// chain where a -> b and b -> /etc/hosts, so resolving a escapes the repo.
+func prepareBareRepoWithSymlinkChain(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, "_chain-symlink")
+	initGitRepo(t, dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("ok\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/hosts", filepath.Join(dir, "b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("b", filepath.Join(dir, "a")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "symlink chain")
+
+	bareCloneToPath(t, dir, filepath.Join(root, "chain-symlink-bare.git"))
+	_ = os.RemoveAll(dir)
+}
+
 // prepareBareRepoWithExternalSymlink creates a bare repo containing a symlink pointing outside the repo.
 func prepareBareRepoWithExternalSymlink(t *testing.T, root string) {
 	t.Helper()

@@ -222,6 +222,23 @@ func TestGitClone(t *testing.T) {
 			check:   func(t *testing.T, workspaceDir, stdout, stderr string, _ map[string]string) {},
 		},
 		{
+			name: "allow broken symlink pointing within repo",
+			skip: func() bool { return runtime.GOOS == "windows" },
+			setup: func(t *testing.T, workspaceDir string) map[string]string {
+				prepareBareRepoWithBrokenInternalSymlink(t, workspaceDir)
+				return nil
+			},
+			url:  "file:///workspace/broken-symlink-bare.git",
+			args: []string{"--depth", "0", "--enable-symlink-check=true", "--submodules=false"},
+			check: func(t *testing.T, workspaceDir, stdout, stderr string, _ map[string]string) {
+				Expect(filepath.Join(workspaceDir, "out", "README.md")).To(BeAnExistingFile())
+				link := filepath.Join(workspaceDir, "out", "broken.link")
+				target, err := os.Readlink(link)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(target).To(Equal("nonexistent-file"))
+			},
+		},
+		{
 			name: "reject external symlink",
 			skip: func() bool { return runtime.GOOS == "windows" },
 			setup: func(t *testing.T, workspaceDir string) map[string]string {
@@ -233,6 +250,36 @@ func TestGitClone(t *testing.T) {
 			wantErr: true,
 			check: func(t *testing.T, workspaceDir, stdout, stderr string, _ map[string]string) {
 				Expect(stderr).To(ContainSubstring("symlink"))
+			},
+		},
+		{
+			name: "reject symlink chain escaping repo",
+			skip: func() bool { return runtime.GOOS == "windows" },
+			setup: func(t *testing.T, workspaceDir string) map[string]string {
+				prepareBareRepoWithSymlinkChain(t, workspaceDir)
+				return nil
+			},
+			url:     "file:///workspace/chain-symlink-bare.git",
+			args:    []string{"--depth", "0", "--enable-symlink-check=true", "--submodules=false"},
+			wantErr: true,
+			check: func(t *testing.T, workspaceDir, stdout, stderr string, _ map[string]string) {
+				Expect(stderr).To(ContainSubstring("symlink"))
+			},
+		},
+		{
+			name: "symlink check ignore pattern skips excluded external symlink",
+			skip: func() bool { return runtime.GOOS == "windows" },
+			setup: func(t *testing.T, workspaceDir string) map[string]string {
+				prepareBareRepoWithExternalSymlink(t, workspaceDir)
+				return nil
+			},
+			url:  "file:///workspace/bad-symlink-bare.git",
+			args: []string{"--depth", "0", "--enable-symlink-check=true", "--symlink-check-ignore-pattern", "bad.link", "--submodules=false"},
+			check: func(t *testing.T, workspaceDir, stdout, stderr string, _ map[string]string) {
+				Expect(filepath.Join(workspaceDir, "out", "README.md")).To(BeAnExistingFile())
+				link := filepath.Join(workspaceDir, "out", "bad.link")
+				_, err := os.Lstat(link)
+				Expect(err).ToNot(HaveOccurred())
 			},
 		},
 		{
