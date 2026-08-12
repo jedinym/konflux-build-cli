@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/containerd/platforms v1.0.0-rc.4
 	github.com/containers/image/v5 v5.36.2
+	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/keilerkonzept/dockerfile-json v1.2.2
 	github.com/konflux-ci/capo v0.5.1
 	github.com/moby/buildkit v0.25.1
@@ -121,7 +122,6 @@ require (
 	github.com/containerd/ttrpc v1.2.8 // indirect
 	github.com/containerd/typeurl/v2 v2.2.3 // indirect
 	github.com/containers/storage v1.59.1 // indirect
-	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/deitch/magic v0.0.0-20230404182410-1ff89d7342da // indirect
 	github.com/diskfs/go-diskfs v1.9.3 // indirect
