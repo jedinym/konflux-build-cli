@@ -3,7 +3,6 @@ package gitclone
 import (
 	"encoding/csv"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,26 +129,11 @@ func (c *GitClone) Run() error {
 
 func (c *GitClone) logParams() {
 	// Log URL params separately with sanitization to avoid leaking credentials
-	l.Logger.Infof("[param] url: %s", sanitizeURL(c.Params.URL))
+	l.Logger.Infof("[param] url: %s", common.SanitizeURL(c.Params.URL))
 	if c.Params.MergeSourceRepoURL != "" {
-		l.Logger.Infof("[param] merge-source-repo-url: %s", sanitizeURL(c.Params.MergeSourceRepoURL))
+		l.Logger.Infof("[param] merge-source-repo-url: %s", common.SanitizeURL(c.Params.MergeSourceRepoURL))
 	}
 	common.LogParameters(ParamsConfig, c.Params, "url", "merge-source-repo-url")
-}
-
-// sanitizeURL removes credentials from a URL for safe logging.
-func sanitizeURL(rawURL string) string {
-	if rawURL == "" {
-		return ""
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	if parsed.User != nil {
-		parsed.User = url.User("***")
-	}
-	return parsed.String()
 }
 
 // normalizeGitURL strips trailing slashes and ".git" suffix for URL comparison.
@@ -294,7 +278,7 @@ func (c *GitClone) performClone() error {
 		}
 	}
 
-	l.Logger.Debugf("Adding remote origin: %s", sanitizeURL(c.Params.URL))
+	l.Logger.Debugf("Adding remote origin: %s", common.SanitizeURL(c.Params.URL))
 	if _, err := c.CliWrappers.GitCli.RemoteAdd("origin", c.Params.URL); err != nil {
 		return err
 	}
