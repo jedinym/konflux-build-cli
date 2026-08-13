@@ -263,7 +263,7 @@ func Test_ConfigLocal(t *testing.T) {
 		err := cli.ConfigLocal("key", "value")
 
 		g.Expect(err).To(HaveOccurred())
-		g.Expect(err.Error()).To(ContainSubstring("git config --local key value"))
+		g.Expect(err.Error()).To(ContainSubstring("git config --local"))
 	})
 }
 
