@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/konflux-ci/konflux-build-cli/pkg/common"
 	l "github.com/konflux-ci/konflux-build-cli/pkg/logger"
 )
 
@@ -134,7 +135,7 @@ func (c *GitClone) setupBasicAuth() error {
 			return fmt.Errorf("failed to parse repository URL: %w", err)
 		}
 		if parsedURL.Scheme == "" || parsedURL.Host == "" {
-			return fmt.Errorf("basic-auth requires an HTTP(S) URL with scheme and host, got: %s", sanitizeURL(c.Params.URL))
+			return fmt.Errorf("basic-auth requires an HTTP(S) URL with scheme and host, got: %s", common.SanitizeURL(c.Params.URL))
 		}
 		hostname := parsedURL.Host
 
