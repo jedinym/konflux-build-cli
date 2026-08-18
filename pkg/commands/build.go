@@ -105,6 +105,17 @@ var BuildParamsConfig = map[string]common.Parameter{
 		Usage: "Manifest type to use when pushing the image (oci or docker). No effect without --push.\n" +
 			"Defaults to the type of the built image, which defaults to oci.",
 	},
+	"compression-format": {
+		Name:         "compression-format",
+		EnvVarName:   "KBC_BUILD_COMPRESSION_FORMAT",
+		TypeKind:     reflect.String,
+		DefaultValue: "",
+		Usage: "Compression format to use when pushing the image (gzip, zstd:chunked, or dual).\n" +
+			"gzip and zstd:chunked are passed to buildah unchanged. dual is a multi-push mode\n" +
+			"handled by the CLI: both variants are pushed and bundled in a per-arch OCI index\n" +
+			"(gzip first for backward compatibility). dual requires an oci-format image and\n" +
+			"conflicts with push-format=docker. No effect without --push. Tech preview.",
+	},
 	"secret-dirs": {
 		Name:       "secret-dirs",
 		ShortName:  "",
@@ -343,6 +354,14 @@ var BuildParamsConfig = map[string]common.Parameter{
 		EnvVarName: "KBC_BUILD_BUILDER_METADATA_OUTPUT",
 		TypeKind:   reflect.String,
 		Usage:      "Path to write builder content metadata (capo output) for mobster consumption.\nAlso requires --buildprobe-output.\nEnables --save-stages and --stage-labels in buildah build.",
+	},
+	"index-manifest-output": {
+		Name:       "index-manifest-output",
+		EnvVarName: "KBC_BUILD_INDEX_MANIFEST_OUTPUT",
+		TypeKind:   reflect.String,
+		Usage: "Path to write the per-arch OCI index manifest (JSON) produced in dual\n" +
+			"compression mode. Consumed by mobster generate oci-index to build the\n" +
+			"per-arch index SBOM. Only written when compression-format=dual.",
 	},
 	"rhsm-entitlements": {
 		Name:       "rhsm-entitlements",
