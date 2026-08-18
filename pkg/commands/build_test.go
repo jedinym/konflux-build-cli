@@ -1751,6 +1751,289 @@ func Test_Build_Run(t *testing.T) {
 			"Images result is only set in dual mode; zstd:chunked behaves like gzip")
 	})
 
+	t.Run("should push dual-compression with per-arch index", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "dual"
+		c.Params.PushFormat = "oci"
+		c.Params.IndexManifestOutput = filepath.Join(tempDir, "index.json")
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+
+		type pushCall struct {
+			Image             string
+			Destination       string
+			CompressionFormat string
+		}
+		var pushCalls []pushCall
+		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+			pushCalls = append(pushCalls, pushCall{args.Image, args.Destination, args.CompressionFormat})
+			if args.CompressionFormat == "gzip" {
+				return "sha256:gzip123", nil
+			}
+			return "sha256:zstd456", nil
+		}
+
+		manifestAddCalls := []string{}
+		var manifestName string
+		var manifestPushDests []string
+		manifestInspectCalled := false
+		_mockBuildahCli.ManifestCreateFunc = func(args *cliwrappers.BuildahManifestCreateArgs) error {
+			manifestName = args.ManifestName
+			return nil
+		}
+		_mockBuildahCli.ManifestAddFunc = func(args *cliwrappers.BuildahManifestAddArgs) error {
+			manifestAddCalls = append(manifestAddCalls, args.ImageRef)
+			return nil
+		}
+		var annotateCalls []cliwrappers.BuildahManifestAnnotateArgs
+		_mockBuildahCli.ManifestAnnotateFunc = func(args *cliwrappers.BuildahManifestAnnotateArgs) error {
+			annotateCalls = append(annotateCalls, *args)
+			return nil
+		}
+		_mockBuildahCli.ManifestPushFunc = func(args *cliwrappers.BuildahManifestPushArgs) (string, error) {
+			manifestPushDests = append(manifestPushDests, args.Destination)
+			return "sha256:index789", nil
+		}
+		_mockBuildahCli.ManifestInspectFunc = func(args *cliwrappers.BuildahManifestInspectArgs) (string, error) {
+			manifestInspectCalled = true
+			return `{"manifests":[]}`, nil
+		}
+		var removedManifest string
+		_mockBuildahCli.ManifestRmFunc = func(args *cliwrappers.BuildahManifestRmArgs) error {
+			removedManifest = args.ManifestName
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(manifestName).To(MatchRegexp(`^localhost/kbc-dual-index-[0-9a-f]{12}-[0-9a-f]{8}$`),
+			"per-arch index must have a unique local name derived from the output ref")
+		g.Expect(removedManifest).To(Equal(manifestName),
+			"the local per-arch index must be removed after the push")
+		g.Expect(manifestInspectCalled).To(BeTrue(), "ManifestInspect must be called to write index-manifest-output")
+		g.Expect(manifestAddCalls).To(HaveLen(2), "ManifestAdd must be called twice (gzip + zstd)")
+		g.Expect(manifestAddCalls[0]).To(ContainSubstring("gzip123"),
+			"gzip variant must be added first for backward compatibility")
+		g.Expect(manifestAddCalls[1]).To(ContainSubstring("zstd456"),
+			"zstd variant must be added second")
+		g.Expect(annotateCalls).To(HaveLen(1),
+			"the zstd variant must be annotated so Podman and CRI-O prefer it")
+		g.Expect(annotateCalls[0].ManifestName).To(Equal(manifestName))
+		g.Expect(annotateCalls[0].InstanceDigest).To(Equal("sha256:zstd456"))
+		g.Expect(annotateCalls[0].Annotations).To(Equal([]string{"io.github.containers.compression.zstd=true"}))
+		g.Expect(pushCalls).To(HaveLen(2), "Push must be called twice (gzip + zstd variants)")
+		g.Expect(pushCalls[0].Image).To(Equal("quay.io/org/image:tag"),
+			"gzip variant must push the locally built image, not a fabricated tag")
+		g.Expect(pushCalls[1].Image).To(Equal("quay.io/org/image:tag"),
+			"zstd variant must push the locally built image, not a fabricated tag")
+		g.Expect(pushCalls[0].Destination).To(MatchRegexp(`^docker://quay\.io/org/image:tag-gzip-[0-9a-f]{8}$`),
+			"gzip variant must be pushed to a unique per-compression temporary tag")
+		g.Expect(pushCalls[1].Destination).To(MatchRegexp(`^docker://quay\.io/org/image:tag-zstd-[0-9a-f]{8}$`),
+			"zstd variant must be pushed to a unique per-compression temporary tag")
+		g.Expect(pushCalls[0].CompressionFormat).To(Equal("gzip"))
+		g.Expect(pushCalls[1].CompressionFormat).To(Equal("zstd:chunked"))
+		g.Expect(manifestPushDests).To(Equal([]string{"docker://quay.io/org/image:tag"}),
+			"per-arch index must be pushed to the real tag via manifest push")
+		g.Expect(c.Results.Digest).To(Equal("sha256:index789"),
+			"Digest must be the per-arch index digest")
+		g.Expect(c.Results.Images).To(Equal(
+			"quay.io/org/image@sha256:gzip123,quay.io/org/image@sha256:zstd456"),
+			"Images result must list both child refs comma-separated, gzip first")
+		indexManifestContent, readErr := os.ReadFile(c.Params.IndexManifestOutput)
+		g.Expect(readErr).ToNot(HaveOccurred())
+		g.Expect(string(indexManifestContent)).To(Equal(`{"manifests":[]}`),
+			"index manifest output must be written from ManifestInspect")
+	})
+
+	t.Run("should push dual-compression index to additional tags", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "dual"
+		c.Params.PushFormat = "oci"
+		c.Params.AdditionalTags = []string{"taskrun-123"}
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+			if args.CompressionFormat == "gzip" {
+				return "sha256:gzip123", nil
+			}
+			return "sha256:zstd456", nil
+		}
+		_mockBuildahCli.ManifestCreateFunc = func(args *cliwrappers.BuildahManifestCreateArgs) error {
+			return nil
+		}
+		_mockBuildahCli.ManifestAddFunc = func(args *cliwrappers.BuildahManifestAddArgs) error {
+			return nil
+		}
+		var indexPushDests []string
+		_mockBuildahCli.ManifestPushFunc = func(args *cliwrappers.BuildahManifestPushArgs) (string, error) {
+			indexPushDests = append(indexPushDests, args.Destination)
+			return "sha256:index789", nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(indexPushDests).To(Equal([]string{
+			"docker://quay.io/org/image:tag",
+			"docker://quay.io/org/image:taskrun-123",
+		}), "index must be pushed to the real tag and each additional tag")
+		g.Expect(c.Results.Digest).To(Equal("sha256:index789"),
+			"Digest must be the per-arch index digest even with additional tags")
+	})
+
+	t.Run("should use unique temporary refs for each dual build", func(t *testing.T) {
+		var manifestNames []string
+		var tempDests []string
+		for i := 0; i < 2; i++ {
+			beforeEach()
+			c.Params.CompressionFormat = "dual"
+
+			_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+				return nil
+			}
+			_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+				if args.CompressionFormat != "" {
+					tempDests = append(tempDests, args.Destination)
+					return "sha256:" + args.CompressionFormat, nil
+				}
+				return "sha256:index", nil
+			}
+			_mockBuildahCli.ManifestCreateFunc = func(args *cliwrappers.BuildahManifestCreateArgs) error {
+				manifestNames = append(manifestNames, args.ManifestName)
+				return nil
+			}
+			_mockBuildahCli.ManifestAddFunc = func(args *cliwrappers.BuildahManifestAddArgs) error {
+				return nil
+			}
+
+			err := c.run()
+			g.Expect(err).ToNot(HaveOccurred())
+		}
+
+		g.Expect(manifestNames).To(HaveLen(2))
+		g.Expect(manifestNames[0]).ToNot(Equal(manifestNames[1]),
+			"concurrent dual builds must not share a local index name")
+		g.Expect(tempDests).To(HaveLen(4))
+		g.Expect(tempDests[0]).ToNot(Equal(tempDests[2]),
+			"concurrent dual builds must not share gzip temporary tags")
+		g.Expect(tempDests[1]).ToNot(Equal(tempDests[3]),
+			"concurrent dual builds must not share zstd temporary tags")
+	})
+
+	t.Run("should reject dual compression with untagged output-ref", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "dual"
+		c.Params.PushFormat = "oci"
+		c.Params.OutputRef = "quay.io/org/image"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("requires a tagged output-ref"),
+			"dual must require a tagged output-ref for the temporary tags")
+	})
+
+	t.Run("should accept dual compression with tag and digest output-ref", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "dual"
+		c.Params.OutputRef = "quay.io/org/image:tag@sha256:" +
+			"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+		var tempDests []string
+		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+			tempDests = append(tempDests, args.Destination)
+			return "sha256:" + args.CompressionFormat, nil
+		}
+		_mockBuildahCli.ManifestCreateFunc = func(args *cliwrappers.BuildahManifestCreateArgs) error {
+			return nil
+		}
+		_mockBuildahCli.ManifestAddFunc = func(args *cliwrappers.BuildahManifestAddArgs) error {
+			return nil
+		}
+		_mockBuildahCli.ManifestPushFunc = func(args *cliwrappers.BuildahManifestPushArgs) (string, error) {
+			return "sha256:index", nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(tempDests).To(HaveLen(2))
+		g.Expect(tempDests[0]).To(HavePrefix("docker://quay.io/org/image:tag-gzip-"),
+			"temporary tags must be derived from the tag part of a tag+digest output-ref")
+		g.Expect(tempDests[1]).To(HavePrefix("docker://quay.io/org/image:tag-zstd-"))
+	})
+
+	t.Run("should reject dual compression with docker format", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "dual"
+		c.Params.PushFormat = "docker"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("conflicts with push-format 'docker'"),
+			"dual cannot work with a docker manifest type")
+	})
+
+	t.Run("should fail dual push when zstd annotation fails", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "dual"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+			return "sha256:" + args.CompressionFormat, nil
+		}
+		var manifestName string
+		_mockBuildahCli.ManifestCreateFunc = func(args *cliwrappers.BuildahManifestCreateArgs) error {
+			manifestName = args.ManifestName
+			return nil
+		}
+		_mockBuildahCli.ManifestAddFunc = func(args *cliwrappers.BuildahManifestAddArgs) error {
+			return nil
+		}
+		_mockBuildahCli.ManifestAnnotateFunc = func(args *cliwrappers.BuildahManifestAnnotateArgs) error {
+			return errors.New("annotate failed")
+		}
+		var removedManifest string
+		_mockBuildahCli.ManifestRmFunc = func(args *cliwrappers.BuildahManifestRmArgs) error {
+			removedManifest = args.ManifestName
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("annotating zstd variant"))
+		g.Expect(removedManifest).To(Equal(manifestName),
+			"the local per-arch index must be removed when index creation fails")
+	})
+
+	t.Run("should reject an invalid compression format", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "zstd-chunked"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+
+		err := c.run()
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("must be 'gzip', 'zstd:chunked', or 'dual'"),
+			"only buildah-native compression format values are accepted")
+	})
+
 	t.Run("should pass buildahSecrets to buildah build", func(t *testing.T) {
 		beforeEach()
 		testutil.WriteFileTree(t, tempDir, map[string]string{
