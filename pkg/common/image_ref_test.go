@@ -139,6 +139,56 @@ func Test_ImageRefUntils_GetImageName(t *testing.T) {
 	}
 }
 
+func Test_ImageRefUtils_GetImageTag(t *testing.T) {
+	tests := []struct {
+		name  string
+		image string
+		want  string
+	}{
+		{
+			name:  "should return tag",
+			image: "quay.io/org/image:tag",
+			want:  "tag",
+		},
+		{
+			name:  "should return tag from namespaced image",
+			image: "namespace/image-name:1.0",
+			want:  "1.0",
+		},
+		{
+			name:  "should return empty string when no tag",
+			image: "quay.io/org/image",
+			want:  "",
+		},
+		{
+			name: "should return empty string for digest reference",
+			image: "quay.io/org/image@sha256:" +
+				"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+			want: "",
+		},
+		{
+			name: "should return tag from tag and digest reference",
+			image: "quay.io/org/image:tag@sha256:" +
+				"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+			want: "tag",
+		},
+		{
+			name:  "should return empty string for invalid reference",
+			image: ":::invalid",
+			want:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := common.GetImageTag(tc.image)
+			if got != tc.want {
+				t.Errorf("For %s expected %s, but got: %s", tc.image, got, tc.want)
+			}
+		})
+	}
+}
+
 func Test_ImageRefUntils_IsImageNameValid(t *testing.T) {
 	validImages := []string{
 		"image",
