@@ -30,21 +30,23 @@ func (m *mockSkopeoCli) Inspect(args *cliwrappers.SkopeoInspectArgs) (string, er
 var _ cliwrappers.BuildahCliInterface = &mockBuildahCli{}
 
 type mockBuildahCli struct {
-	BuildFunc           func(args *cliwrappers.BuildahBuildArgs) error
-	PushFunc            func(args *cliwrappers.BuildahPushArgs) (string, error)
-	PullFunc            func(args *cliwrappers.BuildahPullArgs) error
-	InspectFunc         func(args *cliwrappers.BuildahInspectArgs) (string, error)
-	InspectImageFunc    func(name string) (cliwrappers.BuildahImageInfo, error)
-	VersionFunc         func() (cliwrappers.BuildahVersionInfo, error)
-	ManifestCreateFunc  func(args *cliwrappers.BuildahManifestCreateArgs) error
-	ManifestAddFunc     func(args *cliwrappers.BuildahManifestAddArgs) error
-	ManifestInspectFunc func(args *cliwrappers.BuildahManifestInspectArgs) (string, error)
-	ManifestPushFunc    func(args *cliwrappers.BuildahManifestPushArgs) (string, error)
-	ImagesFunc          func(args *cliwrappers.BuildahImagesArgs) (string, error)
-	ImagesJsonFunc      func(args *cliwrappers.BuildahImagesArgs) ([]cliwrappers.BuildahImagesEntry, error)
-	FromFunc            func(image string) (string, error)
-	RmFunc              func(container string) error
-	MountFunc           func(container string) (string, error)
+	BuildFunc            func(args *cliwrappers.BuildahBuildArgs) error
+	PushFunc             func(args *cliwrappers.BuildahPushArgs) (string, error)
+	PullFunc             func(args *cliwrappers.BuildahPullArgs) error
+	InspectFunc          func(args *cliwrappers.BuildahInspectArgs) (string, error)
+	InspectImageFunc     func(name string) (cliwrappers.BuildahImageInfo, error)
+	VersionFunc          func() (cliwrappers.BuildahVersionInfo, error)
+	ManifestCreateFunc   func(args *cliwrappers.BuildahManifestCreateArgs) error
+	ManifestAddFunc      func(args *cliwrappers.BuildahManifestAddArgs) error
+	ManifestAnnotateFunc func(args *cliwrappers.BuildahManifestAnnotateArgs) error
+	ManifestInspectFunc  func(args *cliwrappers.BuildahManifestInspectArgs) (string, error)
+	ManifestPushFunc     func(args *cliwrappers.BuildahManifestPushArgs) (string, error)
+	ManifestRmFunc       func(args *cliwrappers.BuildahManifestRmArgs) error
+	ImagesFunc           func(args *cliwrappers.BuildahImagesArgs) (string, error)
+	ImagesJsonFunc       func(args *cliwrappers.BuildahImagesArgs) ([]cliwrappers.BuildahImagesEntry, error)
+	FromFunc             func(image string) (string, error)
+	RmFunc               func(container string) error
+	MountFunc            func(container string) (string, error)
 }
 
 func (m *mockBuildahCli) Build(args *cliwrappers.BuildahBuildArgs) error {
@@ -105,6 +107,13 @@ func (m *mockBuildahCli) ManifestAdd(args *cliwrappers.BuildahManifestAddArgs) e
 	return nil
 }
 
+func (m *mockBuildahCli) ManifestAnnotate(args *cliwrappers.BuildahManifestAnnotateArgs) error {
+	if m.ManifestAnnotateFunc != nil {
+		return m.ManifestAnnotateFunc(args)
+	}
+	return nil
+}
+
 func (m *mockBuildahCli) ManifestInspect(args *cliwrappers.BuildahManifestInspectArgs) (string, error) {
 	if m.ManifestInspectFunc != nil {
 		return m.ManifestInspectFunc(args)
@@ -117,6 +126,13 @@ func (m *mockBuildahCli) ManifestPush(args *cliwrappers.BuildahManifestPushArgs)
 		return m.ManifestPushFunc(args)
 	}
 	return "", nil
+}
+
+func (m *mockBuildahCli) ManifestRm(args *cliwrappers.BuildahManifestRmArgs) error {
+	if m.ManifestRmFunc != nil {
+		return m.ManifestRmFunc(args)
+	}
+	return nil
 }
 
 func (m *mockBuildahCli) Images(args *cliwrappers.BuildahImagesArgs) (string, error) {

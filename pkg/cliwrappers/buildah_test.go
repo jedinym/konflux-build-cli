@@ -653,6 +653,29 @@ func TestBuildahCli_Push(t *testing.T) {
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(capturedArgs).To(ContainElement("--format=v2s2"))
 	})
+
+	t.Run("should pass --compression-format", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = mockSuccessfulPush(&capturedArgs)
+
+		_, err := buildahCli.Push(&cliwrappers.BuildahPushArgs{
+			Image:             image,
+			CompressionFormat: "zstd:chunked",
+		})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(capturedArgs).To(ContainElement("--compression-format=zstd:chunked"))
+	})
+
+	t.Run("should omit compression flags by default", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = mockSuccessfulPush(&capturedArgs)
+
+		_, err := buildahCli.Push(&cliwrappers.BuildahPushArgs{Image: image})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(capturedArgs).ToNot(ContainElement(ContainSubstring("--compression-format")))
+	})
 }
 
 func TestBuildahCli_Pull(t *testing.T) {
@@ -1382,6 +1405,124 @@ func TestBuildahCli_ManifestAdd(t *testing.T) {
 	})
 }
 
+func TestBuildahCli_ManifestAnnotate(t *testing.T) {
+	g := NewWithT(t)
+
+	const manifestName = "quay.io/org/myapp:latest"
+	const instanceDigest = "sha256:abc123"
+
+	t.Run("should annotate manifest list entry", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			g.Expect(cmd.Name).To(Equal("buildah"))
+			g.Expect(cmd.LogOutput).To(BeTrue())
+			capturedArgs = cmd.Args
+			return "", "", 0, nil
+		}
+
+		args := &cliwrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   manifestName,
+			InstanceDigest: instanceDigest,
+			Annotations:    []string{"io.github.containers.compression.zstd=true"},
+		}
+
+		err := buildahCli.ManifestAnnotate(args)
+
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(capturedArgs).To(Equal([]string{
+			"manifest", "annotate",
+			"--annotation", "io.github.containers.compression.zstd=true",
+			manifestName, instanceDigest,
+		}))
+	})
+
+	t.Run("should pass multiple annotations", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			capturedArgs = cmd.Args
+			return "", "", 0, nil
+		}
+
+		args := &cliwrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   manifestName,
+			InstanceDigest: instanceDigest,
+			Annotations:    []string{"key1=value1", "key2=value2"},
+		}
+
+		err := buildahCli.ManifestAnnotate(args)
+
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(capturedArgs).To(Equal([]string{
+			"manifest", "annotate",
+			"--annotation", "key1=value1",
+			"--annotation", "key2=value2",
+			manifestName, instanceDigest,
+		}))
+	})
+
+	t.Run("should error if manifest name is empty", func(t *testing.T) {
+		buildahCli, _ := setupBuildahCli()
+		args := &cliwrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   "",
+			InstanceDigest: instanceDigest,
+			Annotations:    []string{"key=value"},
+		}
+
+		err := buildahCli.ManifestAnnotate(args)
+
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("manifest name is empty"))
+	})
+
+	t.Run("should error if instance digest is empty", func(t *testing.T) {
+		buildahCli, _ := setupBuildahCli()
+		args := &cliwrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   manifestName,
+			InstanceDigest: "",
+			Annotations:    []string{"key=value"},
+		}
+
+		err := buildahCli.ManifestAnnotate(args)
+
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("instance digest is empty"))
+	})
+
+	t.Run("should error if annotations are empty", func(t *testing.T) {
+		buildahCli, _ := setupBuildahCli()
+		args := &cliwrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   manifestName,
+			InstanceDigest: instanceDigest,
+			Annotations:    nil,
+		}
+
+		err := buildahCli.ManifestAnnotate(args)
+
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("annotations are empty"))
+	})
+
+	t.Run("should error if buildah execution fails", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			return "", "", 1, errors.New("failed to annotate")
+		}
+
+		args := &cliwrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   manifestName,
+			InstanceDigest: instanceDigest,
+			Annotations:    []string{"key=value"},
+		}
+
+		err := buildahCli.ManifestAnnotate(args)
+
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(Equal("failed to annotate"))
+	})
+}
+
 func TestBuildahCli_ManifestInspect(t *testing.T) {
 	g := NewWithT(t)
 
@@ -1565,6 +1706,60 @@ func TestBuildahCli_ManifestPush(t *testing.T) {
 
 		_, statErr := os.Stat(digestFile)
 		g.Expect(os.IsNotExist(statErr)).To(BeTrue(), "digest file should be cleaned up")
+	})
+}
+
+func TestBuildahCli_ManifestRm(t *testing.T) {
+	g := NewWithT(t)
+
+	const manifestName = "localhost/kbc-dual-index-abcdef123456-12345678"
+
+	t.Run("should remove manifest", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		var capturedArgs []string
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			g.Expect(cmd.Name).To(Equal("buildah"))
+			g.Expect(cmd.LogOutput).To(BeTrue())
+			capturedArgs = cmd.Args
+			return "", "", 0, nil
+		}
+
+		args := &cliwrappers.BuildahManifestRmArgs{
+			ManifestName: manifestName,
+		}
+
+		err := buildahCli.ManifestRm(args)
+
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(capturedArgs).To(Equal([]string{"manifest", "rm", manifestName}))
+	})
+
+	t.Run("should error if manifest name is empty", func(t *testing.T) {
+		buildahCli, _ := setupBuildahCli()
+		args := &cliwrappers.BuildahManifestRmArgs{
+			ManifestName: "",
+		}
+
+		err := buildahCli.ManifestRm(args)
+
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("manifest name is empty"))
+	})
+
+	t.Run("should error if buildah execution fails", func(t *testing.T) {
+		buildahCli, executor := setupBuildahCli()
+		executor.executeFunc = func(cmd cliwrappers.Cmd) (string, string, int, error) {
+			return "", "", 1, errors.New("failed to remove manifest")
+		}
+
+		args := &cliwrappers.BuildahManifestRmArgs{
+			ManifestName: manifestName,
+		}
+
+		err := buildahCli.ManifestRm(args)
+
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(Equal("failed to remove manifest"))
 	})
 }
 
