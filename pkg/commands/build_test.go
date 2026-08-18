@@ -1680,9 +1680,13 @@ func Test_Build_Run(t *testing.T) {
 		}
 
 		pushedImages := []string{}
+		pushedDests := []string{}
 		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
 			pushedImages = append(pushedImages, args.Image)
+			pushedDests = append(pushedDests, args.Destination)
 			g.Expect(args.Format).To(Equal("oci"), "PushFormat must propagate to all Push calls")
+			g.Expect(args.CompressionFormat).To(BeEmpty(),
+				"additional tag pushes must not recompress already-pushed blobs")
 			return "sha256:1234567890abcdef", nil
 		}
 
@@ -1691,9 +1695,60 @@ func Test_Build_Run(t *testing.T) {
 		g.Expect(isBuildCalled).To(BeTrue())
 		g.Expect(pushedImages).To(Equal([]string{
 			"quay.io/org/image:tag",
-			"quay.io/org/image:v1",
-			"quay.io/org/image:v1.0.0",
+			"quay.io/org/image:tag",
+			"quay.io/org/image:tag",
+		}), "additional tags must be pushed from the already-pushed image")
+		g.Expect(pushedDests).To(Equal([]string{
+			"",
+			"docker://quay.io/org/image:v1",
+			"docker://quay.io/org/image:v1.0.0",
 		}))
+	})
+
+	t.Run("should pass explicit gzip compression format through to buildah", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "gzip"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+
+		var pushArgs *cliwrappers.BuildahPushArgs
+		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+			pushArgs = args
+			return "sha256:gzip123", nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(pushArgs.CompressionFormat).To(Equal("gzip"),
+			"CompressionFormat must be passed to buildah unchanged")
+		g.Expect(c.Results.Digest).To(Equal("sha256:gzip123"))
+		g.Expect(c.Results.Images).To(BeEmpty(),
+			"Images result is only set in dual mode")
+	})
+
+	t.Run("should push with zstd:chunked compression format", func(t *testing.T) {
+		beforeEach()
+		c.Params.CompressionFormat = "zstd:chunked"
+
+		_mockBuildahCli.BuildFunc = func(args *cliwrappers.BuildahBuildArgs) error {
+			return nil
+		}
+
+		var pushArgs *cliwrappers.BuildahPushArgs
+		_mockBuildahCli.PushFunc = func(args *cliwrappers.BuildahPushArgs) (string, error) {
+			pushArgs = args
+			return "sha256:zstd123", nil
+		}
+
+		err := c.run()
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(pushArgs.CompressionFormat).To(Equal("zstd:chunked"),
+			"CompressionFormat must propagate to Push call unchanged")
+		g.Expect(c.Results.Digest).To(Equal("sha256:zstd123"))
+		g.Expect(c.Results.Images).To(BeEmpty(),
+			"Images result is only set in dual mode; zstd:chunked behaves like gzip")
 	})
 
 	t.Run("should pass buildahSecrets to buildah build", func(t *testing.T) {

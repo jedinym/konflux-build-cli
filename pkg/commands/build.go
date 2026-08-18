@@ -490,6 +490,7 @@ type BuildParams struct {
 	AdditionalTags             []string `paramName:"additional-tags"`
 	Push                       bool     `paramName:"push"`
 	PushFormat                 string   `paramName:"push-format"`
+	CompressionFormat          string   `paramName:"compression-format"`
 	SecretDirs                 []string `paramName:"secret-dirs"`
 	WorkdirMount               string   `paramName:"workdir-mount"`
 	BuildArgs                  []string `paramName:"build-args"`
@@ -557,8 +558,15 @@ type BuildCliWrappers struct {
 }
 
 type BuildResults struct {
+	// ImageUrl is the repository and tag where the image was pushed.
 	ImageUrl string `json:"image_url"`
-	Digest   string `json:"digest,omitempty"`
+	// Digest is the pushed artifact: the manifest digest, or the per-arch
+	// index digest in dual mode (see Images).
+	Digest string `json:"digest,omitempty"`
+	// Images lists the gzip and zstd:chunked child manifest refs of the
+	// per-arch index as a comma-separated string (same format as the
+	// build-image-index results). Only set in dual mode.
+	Images string `json:"images,omitempty"`
 }
 
 type Build struct {
@@ -902,6 +910,18 @@ func (c *Build) validateParams() error {
 			}
 		} else {
 			l.Logger.Warn("push-format has no effect unless push is enabled, ignoring")
+		}
+	}
+
+	if c.Params.CompressionFormat != "" {
+		if !c.Params.Push {
+			l.Logger.Warn("compression-format has no effect unless push is enabled, ignoring")
+		} else {
+			validFormats := map[string]bool{"gzip": true, "zstd:chunked": true}
+			if !validFormats[c.Params.CompressionFormat] {
+				return fmt.Errorf("compression-format must be 'gzip' or 'zstd:chunked', got '%s'",
+					c.Params.CompressionFormat)
+			}
 		}
 	}
 
@@ -2806,9 +2826,10 @@ func (c *Build) pushImage() (string, error) {
 	l.Logger.Infof("Pushing image to registry: %s", c.Params.OutputRef)
 
 	pushArgs := &cliWrappers.BuildahPushArgs{
-		Image:     c.Params.OutputRef,
-		Format:    c.Params.PushFormat,
-		TLSVerify: &c.Params.DestTLSVerify,
+		Image:             c.Params.OutputRef,
+		Format:            c.Params.PushFormat,
+		TLSVerify:         &c.Params.DestTLSVerify,
+		CompressionFormat: c.Params.CompressionFormat,
 	}
 
 	digest, err := c.CliWrappers.BuildahCli.Push(pushArgs)
@@ -2819,23 +2840,33 @@ func (c *Build) pushImage() (string, error) {
 	l.Logger.Info("Push completed successfully")
 	l.Logger.Infof("Image digest: %s", digest)
 
-	imageName := common.GetImageName(c.Params.OutputRef)
-	for _, tag := range c.Params.AdditionalTags {
-		additionalImage := imageName + ":" + tag
-		l.Logger.Infof("Pushing additional tag: %s", tag)
-
-		_, err := c.CliWrappers.BuildahCli.Push(&cliWrappers.BuildahPushArgs{
-			Image:     additionalImage,
-			Format:    c.Params.PushFormat,
-			TLSVerify: &c.Params.DestTLSVerify,
-		})
-		if err != nil {
-			return "", fmt.Errorf("pushing additional tag %s: %w", tag, err)
-		}
-		l.Logger.Infof("Pushed additional tag successfully: %s", tag)
+	if err := c.pushAdditionalTags(c.Params.OutputRef); err != nil {
+		return "", err
 	}
 
 	return digest, nil
+}
+
+// pushAdditionalTags pushes sourceImage to each additional tag of the output
+// repository. The blobs are already in the registry from the main push, so
+// this is just a manifest copy: no compression flags are passed.
+func (c *Build) pushAdditionalTags(sourceImage string) error {
+	imageName := common.GetImageName(c.Params.OutputRef)
+	for _, tag := range c.Params.AdditionalTags {
+		l.Logger.Infof("Pushing additional tag: %s", tag)
+
+		_, err := c.CliWrappers.BuildahCli.Push(&cliWrappers.BuildahPushArgs{
+			Image:       sourceImage,
+			Destination: "docker://" + imageName + ":" + tag,
+			Format:      c.Params.PushFormat,
+			TLSVerify:   &c.Params.DestTLSVerify,
+		})
+		if err != nil {
+			return fmt.Errorf("pushing additional tag %s: %w", tag, err)
+		}
+		l.Logger.Infof("Pushed additional tag successfully: %s", tag)
+	}
+	return nil
 }
 
 func (c *Build) parseAndMergeBuildArgs() (buildArgs map[string]string, err error) {
