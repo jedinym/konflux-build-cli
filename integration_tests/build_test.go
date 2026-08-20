@@ -47,6 +47,8 @@ type BuildParams struct {
 	OutputRef               string
 	Push                    bool
 	PushFormat              string
+	CompressionFormat       string
+	IndexManifestOutput     string
 	SecretDirs              []string
 	WorkdirMount            string
 	BuildArgs               []string
@@ -291,6 +293,12 @@ func runBuildWithOutput(container *TestRunnerContainer, buildParams BuildParams)
 	if buildParams.PushFormat != "" {
 		args = append(args, "--push-format", buildParams.PushFormat)
 	}
+	if buildParams.CompressionFormat != "" {
+		args = append(args, "--compression-format", buildParams.CompressionFormat)
+	}
+	if buildParams.IndexManifestOutput != "" {
+		args = append(args, "--index-manifest-output", buildParams.IndexManifestOutput)
+	}
 	// Add secret directories if provided
 	if len(buildParams.SecretDirs) > 0 {
 		args = append(args, "--secret-dirs")
@@ -462,12 +470,77 @@ func runBuildWithOutput(container *TestRunnerContainer, buildParams BuildParams)
 type imageBuildResults struct {
 	ImageUrl string `json:"image_url"`
 	Digest   string `json:"digest"`
+	Images   string `json:"images"`
 }
 
 func parseResults(kbcStdout string) imageBuildResults {
 	var results imageBuildResults
 	Expect(json.Unmarshal([]byte(kbcStdout), &results)).To(Succeed())
 	return results
+}
+
+// assertImageIsGzipCompressed checks that all layers of the given registry
+// image are gzip-compressed, resolving a multi-arch index to the manifest for
+// the current architecture first. Used to guard tests whose premise is a
+// gzip-compressed base image.
+func assertImageIsGzipCompressed(t *testing.T, container *TestRunnerContainer, imageRef string) {
+	t.Helper()
+
+	// Split the ref into repo and digest parts. containers-image rejects
+	// references with both a tag and a digest, so the tag is dropped when a
+	// digest is present.
+	repo := imageRef
+	digestPart := ""
+	if r, d, found := strings.Cut(imageRef, "@"); found {
+		repo, digestPart = r, "@"+d
+	}
+	if slash := strings.LastIndex(repo, "/"); slash != -1 {
+		if colon := strings.LastIndex(repo, ":"); colon > slash {
+			repo = repo[:colon]
+		}
+	}
+
+	manifestBytes, _, err := container.ExecuteCommandWithOutput(
+		"skopeo", "inspect", "--raw", "docker://"+repo+digestPart)
+	Expect(err).ToNot(HaveOccurred())
+
+	var manifest struct {
+		Manifests []struct {
+			Digest   string `json:"digest"`
+			Platform struct {
+				Architecture string `json:"architecture"`
+				OS           string `json:"os"`
+			} `json:"platform"`
+		} `json:"manifests"`
+		Layers []struct {
+			MediaType string `json:"mediaType"`
+		} `json:"layers"`
+	}
+	Expect(json.Unmarshal([]byte(manifestBytes), &manifest)).To(Succeed())
+
+	if len(manifest.Manifests) > 0 {
+		// multi-arch index: pick the child matching the test architecture
+		childDigest := ""
+		for _, m := range manifest.Manifests {
+			if m.Platform.OS == "linux" && m.Platform.Architecture == runtime.GOARCH {
+				childDigest = m.Digest
+				break
+			}
+		}
+		Expect(childDigest).ToNot(BeEmpty(),
+			fmt.Sprintf("base image %s must have a linux/%s manifest", imageRef, runtime.GOARCH))
+
+		manifestBytes, _, err = container.ExecuteCommandWithOutput(
+			"skopeo", "inspect", "--raw", "docker://"+repo+"@"+childDigest)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(json.Unmarshal([]byte(manifestBytes), &manifest)).To(Succeed())
+	}
+
+	Expect(manifest.Layers).ToNot(BeEmpty())
+	for _, layer := range manifest.Layers {
+		Expect(layer.MediaType).To(ContainSubstring("gzip"),
+			fmt.Sprintf("base image %s is no longer gzip-compressed, update the test", imageRef))
+	}
 }
 
 // buildahStepLine matches buildah's instruction echo lines.
@@ -1063,6 +1136,231 @@ LABEL %s="1h"
 		results := parseResults(stdout)
 		for actualDigest := range digests {
 			Expect(results.Digest).To(Equal(actualDigest))
+		}
+	})
+
+	t.Run("BuildAndPushZstdChunked", func(t *testing.T) {
+		SetupGomega(t)
+
+		imageRegistry := SetupImageRegistry(t)
+
+		contextDir := setupTestContext(t)
+		writeContainerfile(contextDir, `
+FROM scratch
+COPY hello.txt /hello.txt
+`)
+		Expect(os.WriteFile(contextDir+"/hello.txt", []byte("hello"), 0644)).To(Succeed())
+
+		imageRepoUrl := imageRegistry.GetTestNamespace() + "build-test-image-zstd"
+		mainTag := GenerateUniqueTag(t)
+		addTag1 := mainTag + "-additional-1"
+		addTag2 := mainTag + "-additional-2"
+		outputRef := imageRepoUrl + ":" + mainTag
+
+		buildParams := BuildParams{
+			Context:           contextDir,
+			OutputRef:         outputRef,
+			Push:              true,
+			CompressionFormat: "zstd:chunked",
+			AdditionalTags:    []string{addTag1, addTag2},
+		}
+
+		container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+
+		stdout, _, err := runBuildWithOutput(container, buildParams)
+		Expect(err).ToNot(HaveOccurred())
+
+		manifestBytes, err := GetImageManifest(imageRegistry, imageRepoUrl, mainTag)
+		Expect(err).ToNot(HaveOccurred())
+
+		var manifest struct {
+			MediaType string `json:"mediaType"`
+			Layers    []struct {
+				MediaType   string            `json:"mediaType"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"layers"`
+		}
+		Expect(json.Unmarshal(manifestBytes, &manifest)).To(Succeed())
+		Expect(manifest.MediaType).To(Equal(constants.OCIImageManifest))
+		Expect(manifest.Layers).ToNot(BeEmpty())
+		for _, layer := range manifest.Layers {
+			Expect(layer.MediaType).To(Equal("application/vnd.oci.image.layer.v1.tar+zstd"),
+				"all layers must use zstd compression")
+			Expect(layer.Annotations).To(HaveKey("io.github.containers.zstd-chunked.manifest-checksum"),
+				"zstd:chunked layers must carry the chunked metadata annotations")
+		}
+
+		// Additional tags must point at the same zstd:chunked manifest
+		digests := map[string]struct{}{digest(manifestBytes): {}}
+		for _, tag := range []string{addTag1, addTag2} {
+			tagBytes, err := GetImageManifest(imageRegistry, imageRepoUrl, tag)
+			Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("Expected %s:%s to exist in registry", imageRepoUrl, tag))
+			digests[digest(tagBytes)] = struct{}{}
+		}
+		Expect(digests).To(HaveLen(1), "All the pushed images should have the same digest")
+
+		results := parseResults(stdout)
+		Expect(results.ImageUrl).To(Equal(outputRef))
+		Expect(results.Digest).To(Equal(digest(manifestBytes)))
+		Expect(results.Images).To(BeEmpty(), "images result is only set in dual mode")
+	})
+
+	t.Run("BuildAndPushDual", func(t *testing.T) {
+		SetupGomega(t)
+
+		imageRegistry := SetupImageRegistry(t)
+
+		contextDir := setupTestContext(t)
+		writeContainerfile(contextDir, `
+FROM scratch
+COPY hello.txt /hello.txt
+`)
+		Expect(os.WriteFile(contextDir+"/hello.txt", []byte("hello"), 0644)).To(Succeed())
+
+		imageRepoUrl := imageRegistry.GetTestNamespace() + "build-test-image-dual"
+		mainTag := GenerateUniqueTag(t)
+		addTag1 := mainTag + "-additional-1"
+		addTag2 := mainTag + "-additional-2"
+		outputRef := imageRepoUrl + ":" + mainTag
+		indexManifestPath := "/workspace/per-arch-index-manifest.json"
+
+		buildParams := BuildParams{
+			Context:             contextDir,
+			OutputRef:           outputRef,
+			Push:                true,
+			CompressionFormat:   "dual",
+			IndexManifestOutput: indexManifestPath,
+			AdditionalTags:      []string{addTag1, addTag2},
+		}
+
+		container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+
+		stdout, _, err := runBuildWithOutput(container, buildParams)
+		Expect(err).ToNot(HaveOccurred())
+
+		// The real tag must point at the per-arch OCI index
+		indexBytes, err := GetImageManifest(imageRegistry, imageRepoUrl, mainTag)
+		Expect(err).ToNot(HaveOccurred())
+
+		type ociIndex struct {
+			MediaType string `json:"mediaType"`
+			Manifests []struct {
+				MediaType   string            `json:"mediaType"`
+				Digest      string            `json:"digest"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"manifests"`
+		}
+		var index ociIndex
+		Expect(json.Unmarshal(indexBytes, &index)).To(Succeed())
+		Expect(index.MediaType).To(Equal(constants.OCIImageIndex))
+		Expect(index.Manifests).To(HaveLen(2),
+			"per-arch index must bundle the gzip and zstd:chunked child manifests")
+
+		// The zstd entry must carry the compression annotation: Podman and
+		// CRI-O read it to prefer the zstd variant when pulling the index
+		Expect(index.Manifests[0].Annotations).ToNot(HaveKey("io.github.containers.compression.zstd"),
+			"gzip variant must not carry the zstd annotation")
+		Expect(index.Manifests[1].Annotations).To(HaveKeyWithValue(
+			"io.github.containers.compression.zstd", "true"),
+			"zstd variant must carry the compression annotation")
+
+		// Verify the compression of each child manifest's layers
+		var layerMediaTypes []string
+		var childDigests []string
+		for _, child := range index.Manifests {
+			Expect(child.MediaType).To(Equal(constants.OCIImageManifest))
+			childDigests = append(childDigests, child.Digest)
+			childBytes, err := GetImageManifest(imageRegistry, imageRepoUrl, child.Digest)
+			Expect(err).ToNot(HaveOccurred())
+			var childManifest struct {
+				Layers []struct {
+					MediaType string `json:"mediaType"`
+				} `json:"layers"`
+			}
+			Expect(json.Unmarshal(childBytes, &childManifest)).To(Succeed())
+			Expect(childManifest.Layers).ToNot(BeEmpty())
+			layerMediaTypes = append(layerMediaTypes, childManifest.Layers[0].MediaType)
+		}
+		Expect(layerMediaTypes[0]).To(Equal("application/vnd.oci.image.layer.v1.tar+gzip"),
+			"gzip variant must come first in the index for backward compatibility")
+		Expect(layerMediaTypes[1]).To(Equal("application/vnd.oci.image.layer.v1.tar+zstd"),
+			"zstd variant must come second in the index")
+
+		// Additional tags must point at the same per-arch index
+		indexDigests := map[string]struct{}{digest(indexBytes): {}}
+		for _, tag := range []string{addTag1, addTag2} {
+			tagBytes, err := GetImageManifest(imageRegistry, imageRepoUrl, tag)
+			Expect(err).ToNot(HaveOccurred(), fmt.Sprintf("Expected %s:%s to exist in registry", imageRepoUrl, tag))
+			indexDigests[digest(tagBytes)] = struct{}{}
+		}
+		Expect(indexDigests).To(HaveLen(1), "All the pushed tags should point at the same index")
+
+		// Verify the returned results
+		results := parseResults(stdout)
+		Expect(results.ImageUrl).To(Equal(outputRef))
+		Expect(results.Digest).To(Equal(digest(indexBytes)),
+			"digest result must be the per-arch index digest")
+		Expect(results.Images).To(Equal(
+			imageRepoUrl+"@"+childDigests[0]+","+imageRepoUrl+"@"+childDigests[1]),
+			"images result must list the child manifest refs comma-separated, gzip first")
+
+		// The index manifest JSON for mobster's oci-index SBOM must match the
+		// pushed per-arch index
+		indexManifestJson, _, err := container.ExecuteCommandWithOutput("cat", indexManifestPath)
+		Expect(err).ToNot(HaveOccurred())
+		var writtenIndex ociIndex
+		Expect(json.Unmarshal([]byte(indexManifestJson), &writtenIndex)).To(Succeed())
+		Expect(writtenIndex).To(Equal(index),
+			"index-manifest-output must match the pushed per-arch index")
+	})
+
+	t.Run("BuildAndPushZstdChunkedRecompressesBaseLayers", func(t *testing.T) {
+		SetupGomega(t)
+
+		imageRegistry := SetupImageRegistry(t)
+
+		contextDir := setupTestContext(t)
+		// The base image is served with gzip layers, so all-zstd layers in the
+		// pushed image prove that the base image layers were recompressed too.
+		// buildah defaults force-compression to true when --compression-format
+		// is passed explicitly, so no extra flag is needed for this.
+		writeContainerfile(contextDir, fmt.Sprintf(`
+FROM %s
+`, baseImage))
+
+		imageRepoUrl := imageRegistry.GetTestNamespace() + "build-test-image-zstd-recompress"
+		outputRef := imageRepoUrl + ":" + GenerateUniqueTag(t)
+
+		buildParams := BuildParams{
+			Context:           contextDir,
+			OutputRef:         outputRef,
+			Push:              true,
+			CompressionFormat: "zstd:chunked",
+		}
+
+		container := setupBuildContainerWithCleanup(t, buildParams, imageRegistry)
+
+		// The test relies on the base image being gzip-compressed. If a future
+		// base image bump changes that, fail loudly instead of testing nothing.
+		assertImageIsGzipCompressed(t, container, baseImage)
+
+		_, _, err := runBuildWithOutput(container, buildParams)
+		Expect(err).ToNot(HaveOccurred())
+
+		tag := outputRef[strings.LastIndex(outputRef, ":")+1:]
+		manifestBytes, err := GetImageManifest(imageRegistry, imageRepoUrl, tag)
+		Expect(err).ToNot(HaveOccurred())
+
+		var manifest struct {
+			Layers []struct {
+				MediaType string `json:"mediaType"`
+			} `json:"layers"`
+		}
+		Expect(json.Unmarshal(manifestBytes, &manifest)).To(Succeed())
+		Expect(manifest.Layers).ToNot(BeEmpty())
+		for _, layer := range manifest.Layers {
+			Expect(layer.MediaType).To(Equal("application/vnd.oci.image.layer.v1.tar+zstd"),
+				"base image layers must be recompressed to zstd as well")
 		}
 	})
 

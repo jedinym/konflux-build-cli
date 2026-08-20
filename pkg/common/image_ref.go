@@ -20,6 +20,20 @@ func GetImageName(imageURL string) string {
 	return named.Name()
 }
 
+// GetImageTag extracts the tag from an image reference (e.g. repo:tag -> tag).
+// Returns empty string if the reference has no tag or parsing fails.
+func GetImageTag(imageURL string) string {
+	ref, err := reference.Parse(imageURL)
+	if err != nil {
+		return ""
+	}
+	tagged, ok := ref.(reference.Tagged)
+	if !ok {
+		return ""
+	}
+	return tagged.Tag()
+}
+
 // IsImageNameValid validates image name using containers/image library.
 func IsImageNameValid(imageName string) bool {
 	return imageName != "" && GetImageName(imageName) == imageName

@@ -29,8 +29,10 @@ type BuildahCliInterface interface {
 	Version() (BuildahVersionInfo, error)
 	ManifestCreate(args *BuildahManifestCreateArgs) error
 	ManifestAdd(args *BuildahManifestAddArgs) error
+	ManifestAnnotate(args *BuildahManifestAnnotateArgs) error
 	ManifestInspect(args *BuildahManifestInspectArgs) (string, error)
 	ManifestPush(args *BuildahManifestPushArgs) (string, error)
+	ManifestRm(args *BuildahManifestRmArgs) error
 	From(image string) (string, error)
 	Rm(container string) error
 	Mount(container string) (string, error)
@@ -361,10 +363,11 @@ func (b *BuildahCli) Build(args *BuildahBuildArgs) error {
 }
 
 type BuildahPushArgs struct {
-	Image       string
-	Destination string
-	Format      string
-	TLSVerify   *bool
+	Image             string
+	Destination       string
+	Format            string
+	TLSVerify         *bool
+	CompressionFormat string
 }
 
 // Push an image from local storage to the registry. Return the digest of the pushed manifest.
@@ -390,6 +393,14 @@ func (b *BuildahCli) Push(args *BuildahPushArgs) (string, error) {
 	}
 	if args.Format != "" {
 		buildahArgs = append(buildahArgs, "--format="+args.Format)
+	}
+	// NOTE: buildah defaults force-compression to true when --compression-format
+	// is passed explicitly, so the compression format is used exclusively and
+	// blobs of other compression algorithms are not reused. Dual compression
+	// relies on this: the second variant push must not reuse the blobs the
+	// first push uploaded.
+	if args.CompressionFormat != "" {
+		buildahArgs = append(buildahArgs, "--compression-format="+args.CompressionFormat)
 	}
 	buildahArgs = append(buildahArgs, args.Image)
 	if args.Destination != "" {
@@ -672,6 +683,31 @@ func (b *BuildahCli) ManifestCreate(args *BuildahManifestCreateArgs) error {
 	return nil
 }
 
+type BuildahManifestRmArgs struct {
+	ManifestName string
+}
+
+// ManifestRm removes a manifest list from local storage
+func (b *BuildahCli) ManifestRm(args *BuildahManifestRmArgs) error {
+	if args.ManifestName == "" {
+		return errors.New("manifest name is empty")
+	}
+
+	buildahArgs := []string{"manifest", "rm", args.ManifestName}
+
+	buildahLog.Debugf("Running command:\nbuildah %s", strings.Join(buildahArgs, " "))
+
+	_, _, _, err := b.Executor.Execute(Cmd{Name: "buildah", Args: buildahArgs, LogOutput: true})
+	if err != nil {
+		buildahLog.Errorf("buildah manifest rm failed: %s", err.Error())
+		return err
+	}
+
+	buildahLog.Debug("Manifest rm completed successfully")
+
+	return nil
+}
+
 type BuildahManifestAddArgs struct {
 	ManifestName string
 	ImageRef     string
@@ -702,6 +738,45 @@ func (b *BuildahCli) ManifestAdd(args *BuildahManifestAddArgs) error {
 	}
 
 	buildahLog.Debug("Manifest add completed successfully")
+
+	return nil
+}
+
+type BuildahManifestAnnotateArgs struct {
+	ManifestName string
+	// InstanceDigest identifies the manifest list entry to annotate.
+	InstanceDigest string
+	// Annotations are "key=value" pairs to set on the list entry.
+	Annotations []string
+}
+
+// ManifestAnnotate sets annotations on an entry of a manifest list
+func (b *BuildahCli) ManifestAnnotate(args *BuildahManifestAnnotateArgs) error {
+	if args.ManifestName == "" {
+		return errors.New("manifest name is empty")
+	}
+	if args.InstanceDigest == "" {
+		return errors.New("instance digest is empty")
+	}
+	if len(args.Annotations) == 0 {
+		return errors.New("annotations are empty")
+	}
+
+	buildahArgs := []string{"manifest", "annotate"}
+	for _, annotation := range args.Annotations {
+		buildahArgs = append(buildahArgs, "--annotation", annotation)
+	}
+	buildahArgs = append(buildahArgs, args.ManifestName, args.InstanceDigest)
+
+	buildahLog.Debugf("Running command:\nbuildah %s", strings.Join(buildahArgs, " "))
+
+	_, _, _, err := b.Executor.Execute(Cmd{Name: "buildah", Args: buildahArgs, LogOutput: true})
+	if err != nil {
+		buildahLog.Errorf("buildah manifest annotate failed: %s", err.Error())
+		return err
+	}
+
+	buildahLog.Debug("Manifest annotate completed successfully")
 
 	return nil
 }

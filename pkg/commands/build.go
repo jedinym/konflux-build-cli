@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,6 +104,17 @@ var BuildParamsConfig = map[string]common.Parameter{
 		TypeKind:   reflect.String,
 		Usage: "Manifest type to use when pushing the image (oci or docker). No effect without --push.\n" +
 			"Defaults to the type of the built image, which defaults to oci.",
+	},
+	"compression-format": {
+		Name:         "compression-format",
+		EnvVarName:   "KBC_BUILD_COMPRESSION_FORMAT",
+		TypeKind:     reflect.String,
+		DefaultValue: "",
+		Usage: "Compression format to use when pushing the image (gzip, zstd:chunked, or dual).\n" +
+			"gzip and zstd:chunked are passed to buildah unchanged. dual is a multi-push mode\n" +
+			"handled by the CLI: both variants are pushed and bundled in a per-arch OCI index\n" +
+			"(gzip first for backward compatibility). dual requires an oci-format image and\n" +
+			"conflicts with push-format=docker. No effect without --push. Tech preview.",
 	},
 	"secret-dirs": {
 		Name:       "secret-dirs",
@@ -342,6 +355,14 @@ var BuildParamsConfig = map[string]common.Parameter{
 		TypeKind:   reflect.String,
 		Usage:      "Path to write builder content metadata (capo output) for mobster consumption.\nAlso requires --buildprobe-output.\nEnables --save-stages and --stage-labels in buildah build.",
 	},
+	"index-manifest-output": {
+		Name:       "index-manifest-output",
+		EnvVarName: "KBC_BUILD_INDEX_MANIFEST_OUTPUT",
+		TypeKind:   reflect.String,
+		Usage: "Path to write the per-arch OCI index manifest (JSON) produced in dual\n" +
+			"compression mode. Consumed by mobster generate oci-index to build the\n" +
+			"per-arch index SBOM. Only written when compression-format=dual.",
+	},
 	"rhsm-entitlements": {
 		Name:       "rhsm-entitlements",
 		ShortName:  "",
@@ -490,6 +511,7 @@ type BuildParams struct {
 	AdditionalTags             []string `paramName:"additional-tags"`
 	Push                       bool     `paramName:"push"`
 	PushFormat                 string   `paramName:"push-format"`
+	CompressionFormat          string   `paramName:"compression-format"`
 	SecretDirs                 []string `paramName:"secret-dirs"`
 	WorkdirMount               string   `paramName:"workdir-mount"`
 	BuildArgs                  []string `paramName:"build-args"`
@@ -523,6 +545,7 @@ type BuildParams struct {
 	PrefetchEnvMount           string   `paramName:"prefetch-env-mount"`
 	ResolvedBaseImagesOutput   string   `paramName:"resolved-base-images-output"`
 	BuilderMetadataOutput      string   `paramName:"builder-metadata-output"`
+	IndexManifestOutput        string   `paramName:"index-manifest-output"`
 	RHSMEntitlements           string   `paramName:"rhsm-entitlements"`
 	RHSMActivationKey          string   `paramName:"rhsm-activation-key"`
 	RHSMOrg                    string   `paramName:"rhsm-org"`
@@ -557,8 +580,15 @@ type BuildCliWrappers struct {
 }
 
 type BuildResults struct {
+	// ImageUrl is the repository and tag where the image was pushed.
 	ImageUrl string `json:"image_url"`
-	Digest   string `json:"digest,omitempty"`
+	// Digest is the pushed artifact: the manifest digest, or the per-arch
+	// index digest in dual mode (see Images).
+	Digest string `json:"digest,omitempty"`
+	// Images lists the gzip and zstd:chunked child manifest refs of the
+	// per-arch index as a comma-separated string (same format as the
+	// build-image-index results). Only set in dual mode.
+	Images string `json:"images,omitempty"`
 }
 
 type Build struct {
@@ -902,6 +932,28 @@ func (c *Build) validateParams() error {
 			}
 		} else {
 			l.Logger.Warn("push-format has no effect unless push is enabled, ignoring")
+		}
+	}
+
+	if c.Params.CompressionFormat != "" {
+		if !c.Params.Push {
+			l.Logger.Warn("compression-format has no effect unless push is enabled, ignoring")
+		} else {
+			validFormats := map[string]bool{"gzip": true, "zstd:chunked": true, "dual": true}
+			if !validFormats[c.Params.CompressionFormat] {
+				return fmt.Errorf("compression-format must be 'gzip', 'zstd:chunked', or 'dual', got '%s'",
+					c.Params.CompressionFormat)
+			}
+			if c.Params.CompressionFormat == "dual" {
+				// dual bundles the variants in an OCI index
+				if c.Params.PushFormat == "docker" {
+					return fmt.Errorf("compression-format 'dual' conflicts with push-format 'docker'")
+				}
+				if common.GetImageTag(c.Params.OutputRef) == "" {
+					return fmt.Errorf("compression-format 'dual' requires a tagged output-ref, got '%s'",
+						c.Params.OutputRef)
+				}
+			}
 		}
 	}
 
@@ -2803,12 +2855,17 @@ func (c *Build) enableBuilderContentScanning() bool {
 }
 
 func (c *Build) pushImage() (string, error) {
+	if c.Params.CompressionFormat == "dual" {
+		return c.pushImageDual()
+	}
+
 	l.Logger.Infof("Pushing image to registry: %s", c.Params.OutputRef)
 
 	pushArgs := &cliWrappers.BuildahPushArgs{
-		Image:     c.Params.OutputRef,
-		Format:    c.Params.PushFormat,
-		TLSVerify: &c.Params.DestTLSVerify,
+		Image:             c.Params.OutputRef,
+		Format:            c.Params.PushFormat,
+		TLSVerify:         &c.Params.DestTLSVerify,
+		CompressionFormat: c.Params.CompressionFormat,
 	}
 
 	digest, err := c.CliWrappers.BuildahCli.Push(pushArgs)
@@ -2819,23 +2876,251 @@ func (c *Build) pushImage() (string, error) {
 	l.Logger.Info("Push completed successfully")
 	l.Logger.Infof("Image digest: %s", digest)
 
-	imageName := common.GetImageName(c.Params.OutputRef)
-	for _, tag := range c.Params.AdditionalTags {
-		additionalImage := imageName + ":" + tag
-		l.Logger.Infof("Pushing additional tag: %s", tag)
+	if err := c.pushAdditionalTags(c.Params.OutputRef); err != nil {
+		return "", err
+	}
 
-		_, err := c.CliWrappers.BuildahCli.Push(&cliWrappers.BuildahPushArgs{
-			Image:     additionalImage,
-			Format:    c.Params.PushFormat,
-			TLSVerify: &c.Params.DestTLSVerify,
-		})
+	return digest, nil
+}
+
+// zstdIndexAnnotation marks an index entry as zstd-compressed. Podman and
+// CRI-O read it to prefer the zstd variant when pulling from an index.
+const zstdIndexAnnotation = "io.github.containers.compression.zstd=true"
+
+// dualPushSuffix returns a random hex string making this build's temporary
+// tags and local index name unique, so concurrent builds can't clobber each
+// other.
+func dualPushSuffix() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating suffix for dual-compression temporary refs: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// dualVariant describes one compression variant of a dual push.
+type dualVariant struct {
+	// name is used in logs and errors.
+	name string
+	// tagSuffix distinguishes the variant's temporary tag, e.g. "<tag>-gzip-<suffix>".
+	tagSuffix string
+	// format is the buildah --compression-format value.
+	format string
+}
+
+// dualVariants lists the variants in index order: gzip first, because old
+// Docker clients pick the first acceptable manifest.
+var dualVariants = []dualVariant{
+	{name: "gzip", tagSuffix: "gzip", format: "gzip"},
+	{name: "zstd", tagSuffix: "zstd", format: "zstd:chunked"},
+}
+
+// pushedVariant is a pushed compression variant: its manifest digest and its
+// digest-pinned registry reference.
+type pushedVariant struct {
+	digest string
+	ref    string
+}
+
+func (c *Build) pushImageDual() (string, error) {
+	l.Logger.Info("Pushing dual-compression image (gzip + zstd:chunked)")
+
+	imageRepo := common.GetImageName(c.Params.OutputRef)
+	imageTag := common.GetImageTag(c.Params.OutputRef)
+
+	suffix, err := dualPushSuffix()
+	if err != nil {
+		return "", err
+	}
+
+	gzipVariant, zstdVariant, err := c.pushDualVariants(imageRepo, imageTag, suffix)
+	if err != nil {
+		return "", err
+	}
+
+	perArchIndex, err := c.createPerArchIndex(gzipVariant, zstdVariant, suffix)
+	if err != nil {
+		return "", err
+	}
+	defer c.removePerArchIndex(perArchIndex)
+
+	// Persist the index manifest JSON for mobster's oci-index SBOM.
+	if c.Params.IndexManifestOutput != "" {
+		if err := c.writeIndexManifest(perArchIndex, c.Params.IndexManifestOutput); err != nil {
+			return "", err
+		}
+	}
+
+	// Plain 'buildah push' can't push the index: its children were added by
+	// registry digest and aren't in local storage. manifest push copies them
+	// from the registry (same flow as image build-image-index).
+	indexDigest, err := c.CliWrappers.BuildahCli.ManifestPush(
+		&cliWrappers.BuildahManifestPushArgs{
+			ManifestName: perArchIndex,
+			Destination:  "docker://" + c.Params.OutputRef,
+			Format:       c.Params.PushFormat,
+			TLSVerify:    c.Params.DestTLSVerify,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("pushing per-arch index: %w", err)
+	}
+
+	l.Logger.Infof("Per-arch index pushed, digest: %s", indexDigest)
+
+	// The blobs are already in the registry, so these are manifest copies.
+	for _, tag := range c.Params.AdditionalTags {
+		additionalDest := imageRepo + ":" + tag
+		l.Logger.Infof("Pushing additional tag: %s", tag)
+		_, err := c.CliWrappers.BuildahCli.ManifestPush(
+			&cliWrappers.BuildahManifestPushArgs{
+				ManifestName: perArchIndex,
+				Destination:  "docker://" + additionalDest,
+				Format:       c.Params.PushFormat,
+				TLSVerify:    c.Params.DestTLSVerify,
+			},
+		)
 		if err != nil {
 			return "", fmt.Errorf("pushing additional tag %s: %w", tag, err)
 		}
 		l.Logger.Infof("Pushed additional tag successfully: %s", tag)
 	}
 
-	return digest, nil
+	c.Results.Images = strings.Join([]string{gzipVariant.ref, zstdVariant.ref}, ",")
+
+	return indexDigest, nil
+}
+
+// pushDualVariants pushes the image once per compression format to temporary
+// per-compression tags, so the real tag only ever points at the final per-arch
+// index. The index references the variants by digest.
+func (c *Build) pushDualVariants(imageRepo, imageTag, suffix string) (gzip, zstd pushedVariant, err error) {
+	variants := make([]pushedVariant, 0, len(dualVariants))
+	for _, variant := range dualVariants {
+		tagRef := fmt.Sprintf("%s:%s-%s-%s", imageRepo, imageTag, variant.tagSuffix, suffix)
+		variantDigest, err := c.CliWrappers.BuildahCli.Push(&cliWrappers.BuildahPushArgs{
+			Image:             c.Params.OutputRef,
+			Destination:       "docker://" + tagRef,
+			Format:            c.Params.PushFormat,
+			TLSVerify:         &c.Params.DestTLSVerify,
+			CompressionFormat: variant.format,
+		})
+		if err != nil {
+			return pushedVariant{}, pushedVariant{}, fmt.Errorf("pushing %s variant: %w", variant.name, err)
+		}
+		l.Logger.Infof("%s variant pushed, digest: %s", variant.name, variantDigest)
+		variants = append(variants, pushedVariant{
+			digest: variantDigest,
+			ref:    imageRepo + "@" + variantDigest,
+		})
+	}
+	return variants[0], variants[1], nil
+}
+
+// createPerArchIndex builds the local per-arch index bundling the gzip and
+// zstd variants and returns its name. The index only exists in local storage
+// until pushed. On failure the local index is removed again.
+func (c *Build) createPerArchIndex(gzip, zstd pushedVariant, suffix string) (string, error) {
+	// Local-only index name, unique per build ('manifest create' fails on
+	// existing names).
+	perArchIndex := fmt.Sprintf("localhost/kbc-dual-index-%s-%s",
+		digest.FromString(c.Params.OutputRef).Encoded()[:12], suffix)
+	if err := c.CliWrappers.BuildahCli.ManifestCreate(
+		&cliWrappers.BuildahManifestCreateArgs{ManifestName: perArchIndex},
+	); err != nil {
+		return "", fmt.Errorf("creating per-arch index: %w", err)
+	}
+	// Remove the local index again if any of the following steps fail.
+	cleanup := true
+	defer func() {
+		if cleanup {
+			c.removePerArchIndex(perArchIndex)
+		}
+	}()
+
+	// gzip first in the index for backward compatibility with older Docker clients
+	if err := c.CliWrappers.BuildahCli.ManifestAdd(
+		&cliWrappers.BuildahManifestAddArgs{
+			ManifestName: perArchIndex,
+			ImageRef:     "docker://" + gzip.ref,
+		},
+	); err != nil {
+		return "", fmt.Errorf("adding gzip variant to manifest: %w", err)
+	}
+
+	if err := c.CliWrappers.BuildahCli.ManifestAdd(
+		&cliWrappers.BuildahManifestAddArgs{
+			ManifestName: perArchIndex,
+			ImageRef:     "docker://" + zstd.ref,
+		},
+	); err != nil {
+		return "", fmt.Errorf("adding zstd variant to manifest: %w", err)
+	}
+
+	// buildah does not set the zstd annotation when adding a manifest by
+	// registry reference (it only sets it for manifest push
+	// --add-compression), so annotate the entry explicitly.
+	if err := c.CliWrappers.BuildahCli.ManifestAnnotate(
+		&cliWrappers.BuildahManifestAnnotateArgs{
+			ManifestName:   perArchIndex,
+			InstanceDigest: zstd.digest,
+			Annotations:    []string{zstdIndexAnnotation},
+		},
+	); err != nil {
+		return "", fmt.Errorf("annotating zstd variant: %w", err)
+	}
+
+	cleanup = false
+	return perArchIndex, nil
+}
+
+// removePerArchIndex removes the local per-arch index, logging failures only.
+func (c *Build) removePerArchIndex(perArchIndex string) {
+	if err := c.CliWrappers.BuildahCli.ManifestRm(
+		&cliWrappers.BuildahManifestRmArgs{ManifestName: perArchIndex},
+	); err != nil {
+		l.Logger.Warnf("Failed to remove local per-arch index %s: %v", perArchIndex, err)
+	}
+}
+
+func (c *Build) writeIndexManifest(manifestName, outputPath string) error {
+	l.Logger.Infof("Writing per-arch index manifest to: %s", outputPath)
+
+	manifestJson, err := c.CliWrappers.BuildahCli.ManifestInspect(
+		&cliWrappers.BuildahManifestInspectArgs{ManifestName: manifestName},
+	)
+	if err != nil {
+		return fmt.Errorf("inspecting per-arch index: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, []byte(manifestJson), 0644); err != nil {
+		return fmt.Errorf("writing per-arch index manifest: %w", err)
+	}
+
+	l.Logger.Info("Per-arch index manifest written successfully")
+	return nil
+}
+
+// pushAdditionalTags pushes sourceImage to each additional tag of the output
+// repository. The blobs are already in the registry from the main push, so
+// this is just a manifest copy: no compression flags are passed.
+func (c *Build) pushAdditionalTags(sourceImage string) error {
+	imageName := common.GetImageName(c.Params.OutputRef)
+	for _, tag := range c.Params.AdditionalTags {
+		l.Logger.Infof("Pushing additional tag: %s", tag)
+
+		_, err := c.CliWrappers.BuildahCli.Push(&cliWrappers.BuildahPushArgs{
+			Image:       sourceImage,
+			Destination: "docker://" + imageName + ":" + tag,
+			Format:      c.Params.PushFormat,
+			TLSVerify:   &c.Params.DestTLSVerify,
+		})
+		if err != nil {
+			return fmt.Errorf("pushing additional tag %s: %w", tag, err)
+		}
+		l.Logger.Infof("Pushed additional tag successfully: %s", tag)
+	}
+	return nil
 }
 
 func (c *Build) parseAndMergeBuildArgs() (buildArgs map[string]string, err error) {
