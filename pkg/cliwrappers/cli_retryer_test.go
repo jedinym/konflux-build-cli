@@ -64,6 +64,25 @@ func TestRetryer_Config(t *testing.T) {
 		g.Expect(retryer.MaxAttempts).To(BeNumerically(">", 0))
 	})
 
+	t.Run("should be able to set and clamp jitter fraction", func(t *testing.T) {
+		retryer := cliwrappers.NewRetryer(cliFunc)
+
+		retryer.WithJitter(0.5)
+		g.Expect(retryer.JitterFraction).To(Equal(0.5))
+
+		retryer.WithJitter(-1)
+		g.Expect(retryer.JitterFraction).To(Equal(0.0))
+
+		retryer.WithJitter(2)
+		g.Expect(retryer.JitterFraction).To(Equal(1.0))
+	})
+
+	t.Run("image registry preset enables jitter", func(t *testing.T) {
+		retryer := cliwrappers.NewRetryer(cliFunc).WithImageRegistryPreset()
+		g.Expect(retryer.JitterFraction).To(Equal(0.5))
+		g.Expect(retryer.MaxAttempts).To(Equal(10))
+	})
+
 	t.Run("should be able to use configuration presets", func(t *testing.T) {
 		configurationPresets := []func(*cliwrappers.Retryer) *cliwrappers.Retryer{
 			(*cliwrappers.Retryer).WithImageRegistryPreset,

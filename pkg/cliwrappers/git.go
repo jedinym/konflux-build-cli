@@ -339,6 +339,7 @@ func (g *GitCli) FetchWithRefspec(opts GitFetchOptions) error {
 		retryer = retryer.WithMaxAttempts(opts.MaxAttempts)
 	}
 	retryer = retryer.
+		WithJitter(0.5).
 		StopOnExitCode(128).
 		StopIfOutputContains("Authentication failed").
 		StopIfOutputContains("could not read Username").
